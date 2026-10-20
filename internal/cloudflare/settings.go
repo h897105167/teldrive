@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -44,6 +45,39 @@ func SaveGatewaySettings(configPath string, enabled *bool, workerMinBytes *int64
 	})
 }
 
+// configBackupKeep 是 config.toml 备份文件的保留数量。设置页的开关每次切换
+// 都会写一个备份；不设上限时一天下来会在 /etc/teldrive 里堆出几十个副本，
+// 掩盖真正需要人工回滚的那一个。
+const configBackupKeep = 10
+
+// pruneBackups 删除最旧的备份，只保留最近 keep 个。备份名以 UTC 时间戳结尾，
+// 所以按名字排序即按时间排序。清理失败不影响主流程（写回已经成功）。
+func pruneBackups(configPath string, keep int) {
+	if keep <= 0 {
+		return
+	}
+	dir := filepath.Dir(configPath)
+	prefix := filepath.Base(configPath) + ".bak-"
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), prefix) {
+			continue
+		}
+		names = append(names, entry.Name())
+	}
+	if len(names) <= keep {
+		return
+	}
+	sort.Strings(names)
+	for _, name := range names[:len(names)-keep] {
+		_ = os.Remove(filepath.Join(dir, name))
+	}
+}
+
 // saveGateway 读取现有配置、应用 mutate、再原子写回。备份文件名带 UTC 时间戳，
 // 失败时不改动原文件。
 func saveGateway(configPath string, mutate func(*config.Config)) error {
@@ -59,6 +93,7 @@ func saveGateway(configPath string, mutate func(*config.Config)) error {
 	if err := os.WriteFile(backup, raw, 0o644); err != nil {
 		return fmt.Errorf("write config backup: %w", err)
 	}
+	pruneBackups(configPath, configBackupKeep)
 
 	cfg, err := config.LoadFromPath(configPath)
 	if err != nil {

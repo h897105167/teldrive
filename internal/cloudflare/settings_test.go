@@ -145,3 +145,53 @@ func TestSaveGatewaySettingsRejectsEmptyPath(t *testing.T) {
 		t.Fatal("SaveGatewaySettings() with an empty path = nil, want error")
 	}
 }
+
+// TestSaveGatewaySettingsPrunesOldBackups guards /etc/teldrive from filling up
+// with one backup per mode switch.
+func TestSaveGatewaySettingsPrunesOldBackups(t *testing.T) {
+	t.Parallel()
+
+	path := writeTestConfig(t)
+	dir := filepath.Dir(path)
+	// Pre-seed more backups than the retention limit, with names that sort
+	// oldest-first the way real timestamps do.
+	const seeded = 15
+	for i := 0; i < seeded; i++ {
+		name := filepath.Join(dir, "config.toml.bak-202601010000"+twoDigits(i))
+		if err := os.WriteFile(name, []byte("old"), 0o600); err != nil {
+			t.Fatalf("seed backup: %v", err)
+		}
+	}
+
+	enabled := false
+	if err := SaveGatewaySettings(path, &enabled, nil); err != nil {
+		t.Fatalf("SaveGatewaySettings() error = %v", err)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read dir: %v", err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "config.toml.bak-") {
+			names = append(names, entry.Name())
+		}
+	}
+	if len(names) > configBackupKeep {
+		t.Fatalf("backups = %d, want at most %d", len(names), configBackupKeep)
+	}
+	// The oldest seeds must be the ones dropped.
+	for _, name := range names {
+		if strings.HasSuffix(name, "00") || strings.HasSuffix(name, "05") {
+			t.Fatalf("old backup %q survived pruning: %v", name, names)
+		}
+	}
+}
+
+func twoDigits(v int) string {
+	if v < 10 {
+		return "0" + string(rune('0'+v))
+	}
+	return string(rune('0'+v/10)) + string(rune('0'+v%10))
+}
