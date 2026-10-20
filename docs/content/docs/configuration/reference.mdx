@@ -63,6 +63,18 @@ Defaults are runtime values, not production recommendations.
 
 <ConfigOption name={"events.write-timeout"} flag={"--events-write-timeout"} env={"TELDRIVE_EVENTS_WRITE_TIMEOUT"} defaultValue={"10s"} description={"Maximum duration for one SSE write and flush"} />
 
+## Gateway
+
+<ConfigOption name={"gateway.bot-slots"} flag={"--gateway-bot-slots"} env={"TELDRIVE_GATEWAY_BOT_SLOTS"} defaultValue={""} description={"Comma-separated Telegram bot numeric IDs in slot order; slot n uses entry n"} />
+
+<ConfigOption name={"gateway.enabled"} flag={"--gateway-enabled"} env={"TELDRIVE_GATEWAY_ENABLED"} defaultValue={"false"} description={"Serve download bytes directly from the Cloudflare gateway Worker instead of this server"} />
+
+<ConfigOption name={"gateway.public-url"} flag={"--gateway-public-url"} env={"TELDRIVE_GATEWAY_PUBLIC_URL"} defaultValue={""} description={"Gateway Worker base URL used in download redirects (for example https://name.workers.dev)"} />
+
+<ConfigOption name={"gateway.secret"} flag={"--gateway-secret"} env={"TELDRIVE_GATEWAY_SECRET"} defaultValue={""} description={"HMAC secret shared with the gateway Worker (GATEWAY_SECRET)"} />
+
+<ConfigOption name={"gateway.ticket-ttl"} flag={"--gateway-ticket-ttl"} env={"TELDRIVE_GATEWAY_TICKET_TTL"} defaultValue={"10m0s"} description={"Lifetime of gateway download tickets"} />
+
 ## HTTP
 
 <ConfigOption name={"http.address"} flag={"--http-address"} env={"TELDRIVE_HTTP_ADDRESS"} defaultValue={"127.0.0.1:8080"} description={"HTTP listen address"} />

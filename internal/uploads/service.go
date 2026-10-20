@@ -361,6 +361,120 @@ func (s *Service) StorePart(ctx context.Context, in StorePartInput) (*sqlcgen.Up
 	return part, nil
 }
 
+// ClaimPartBotInput 是网关上传（P2）的分块 claim 入参：分块字节不经服务端，
+// 由客户端直传 Cloudflare Worker，服务端仅登记 bot 归属与租约。
+type ClaimPartBotInput struct {
+	UserID    int64
+	UploadID  uuid.UUID
+	PartNo    int32
+	ChannelID int64
+	PlainSize int64
+	BotID     int64
+	// LeaseTTL 覆盖默认租约时长；网关路径需与上传 ticket 同寿命（默认 10 分钟），
+	// 小于等于 0 时回退到 s.leaseTTL。
+	LeaseTTL time.Duration
+}
+
+// ClaimPartBot 与 ClaimPart 的互斥语义一致，但登记为 storage_kind='bot' 且无校验和。
+// 已 stored 的分块（无论 mtproto 还是 bot）在 plain_size 一致时幂等返回 Existing=true，
+// 调用方据此直接回复客户端跳过上传。
+func (s *Service) ClaimPartBot(ctx context.Context, in ClaimPartBotInput) (*ClaimPartResult, error) {
+	if in.UserID <= 0 || in.PartNo <= 0 || in.ChannelID == 0 || in.PlainSize < 0 || in.BotID <= 0 {
+		return nil, ErrInvalidInput
+	}
+	session, err := s.Get(ctx, in.UserID, in.UploadID)
+	if err != nil {
+		return nil, err
+	}
+	if session.State != sqlcgen.UploadStateOpen {
+		return nil, ErrInvalidState
+	}
+	if !session.ExpiresAt.Time.After(s.now()) {
+		return nil, ErrExpired
+	}
+	if err := validatePartShape(session, in.PartNo, in.PlainSize); err != nil {
+		return nil, err
+	}
+	if _, err := s.queries.GetChannelForUser(ctx, sqlcgen.GetChannelForUserParams{
+		UserID:    in.UserID,
+		ChannelID: in.ChannelID,
+	}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrInvalidChannel
+		}
+		return nil, fmt.Errorf("get upload channel: %w", err)
+	}
+
+	existing, err := s.queries.GetUploadPart(ctx, sqlcgen.GetUploadPartParams{
+		UploadID: dbtypes.UUID(in.UploadID),
+		PartNo:   in.PartNo,
+	})
+	if err == nil && existing.State == sqlcgen.UploadPartStateStored {
+		if existing.PlainSize == in.PlainSize {
+			return &ClaimPartResult{Part: existing, Existing: true}, nil
+		}
+		return nil, ErrPartConflict
+	}
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("get upload part: %w", err)
+	}
+
+	leaseTTL := in.LeaseTTL
+	if leaseTTL <= 0 {
+		leaseTTL = s.leaseTTL
+	}
+	leaseToken := uuid.New()
+	part, err := s.queries.ClaimUploadPartBot(ctx, sqlcgen.ClaimUploadPartBotParams{
+		UploadID:       dbtypes.UUID(in.UploadID),
+		PartNo:         in.PartNo,
+		ChannelID:      in.ChannelID,
+		PlainSize:      in.PlainSize,
+		BotID:          dbtypes.Int8(in.BotID),
+		LeaseToken:     dbtypes.UUID(leaseToken),
+		LeaseExpiresAt: dbtypes.Time(s.now().UTC().Add(leaseTTL)),
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrPartBusy
+	}
+	if err != nil {
+		return nil, fmt.Errorf("claim bot upload part: %w", err)
+	}
+	return &ClaimPartResult{Part: part, LeaseToken: leaseToken}, nil
+}
+
+// StorePartBotInput 是 Worker 回调落库的入参，字段全部来自 Telegram sendDocument 结果。
+type StorePartBotInput struct {
+	UploadID       uuid.UUID
+	PartNo         int32
+	LeaseToken     uuid.UUID
+	MessageID      int64
+	StoredSize     int64
+	TelegramFileID string
+}
+
+// StorePartBot 将 bot 分块标记为 stored；租约丢失或已被重写时返回 ErrLeaseLost。
+func (s *Service) StorePartBot(ctx context.Context, in StorePartBotInput) (*sqlcgen.UploadPart, error) {
+	if in.UploadID == uuid.Nil || in.PartNo <= 0 || in.LeaseToken == uuid.Nil ||
+		in.MessageID <= 0 || in.StoredSize < 0 || strings.TrimSpace(in.TelegramFileID) == "" {
+		return nil, ErrInvalidInput
+	}
+	part, err := s.queries.MarkUploadPartStoredBot(ctx, sqlcgen.MarkUploadPartStoredBotParams{
+		MessageID:      dbtypes.Int8(in.MessageID),
+		StoredSize:     dbtypes.Int8(in.StoredSize),
+		TelegramFileID: dbtypes.Text(strings.TrimSpace(in.TelegramFileID)),
+		UploadID:       dbtypes.UUID(in.UploadID),
+		PartNo:         in.PartNo,
+		LeaseToken:     dbtypes.UUID(in.LeaseToken),
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrLeaseLost
+	}
+	if err != nil {
+		return nil, fmt.Errorf("store bot upload part: %w", err)
+	}
+	return part, nil
+}
+
 type FailPartInput struct {
 	UploadID   uuid.UUID
 	PartNo     int32

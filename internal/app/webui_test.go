@@ -72,7 +72,7 @@ func TestRouteApplicationKeepsAPIAndSPASeparate(t *testing.T) {
 		_, _ = io.WriteString(w, "ui:"+r.URL.Path)
 	})
 	mux := chi.NewRouter()
-	routeApplication(mux, api, ui)
+	routeApplication(mux, api, ui, nil, nil)
 
 	tests := map[string]string{
 		"/api/v1/files": "api:/v1/files",

@@ -27,6 +27,7 @@ function BotsSettings() {
   const [deleteBot, setDeleteBot] = useState<{ id: number; name: string } | null>(null);
   const [provisionBot, setProvisionBot] = useState<{ id: number; name: string } | null>(null);
   const [provisionAllOpen, setProvisionAllOpen] = useState(false);
+  const [deployOpen, setDeployOpen] = useState(false);
   const { t } = useAppLocale();
   const formatDateTime = useDateTimeFormatter();
   const query = $api.useSuspenseQuery(
@@ -35,7 +36,23 @@ function BotsSettings() {
     { params: { query: { limit: 200 } } },
     { staleTime: 20_000 },
   );
+  const probe = $api.useSuspenseQuery("get", "/v1/settings/probe", undefined, {
+    staleTime: 15_000,
+  });
   const create = $api.useMutation("post", "/v1/bots");
+  const deployWorker = $api.useMutation("post", "/v1/settings/worker-deploy", {
+    onSuccess: (result) => {
+      setDeployOpen(false);
+      toast.success(t("cf.deployed"), {
+        description: t("cf.deployedDesc", { url: result.workerUrl }),
+      });
+      void probe.refetch();
+    },
+    onError: (error) => {
+      toast.error(t("cf.deployFailed"), { description: userMessage(error) });
+    },
+  });
+  const enabledCount = query.data.items.filter((bot) => bot.enabled).length;
   const provision = $api.useMutation("post", "/v1/bots/{botId}/provision", {
     onSuccess: () => {
       setProvisionBot(null);
@@ -152,22 +169,40 @@ function BotsSettings() {
         title={t("bots.configured")}
         description={t("bots.configuredDesc")}
         actions={
-          <Button
-            size="sm"
-            variant="secondary"
-            isDisabled={
-              !query.data.items.length ||
-              provisionAll.isPending ||
-              provision.isPending ||
-              remove.isPending
-            }
-            isPending={provisionAll.isPending}
-            onPress={() => setProvisionAllOpen(true)}
-          >
-            {t("bots.provisionAll")}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="primary"
+              isDisabled={
+                enabledCount === 0 ||
+                !probe.data.cloudflareApiTokenConfigured ||
+                deployWorker.isPending
+              }
+              isPending={deployWorker.isPending}
+              onPress={() => setDeployOpen(true)}
+            >
+              {t("bots.deployWorker")}
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              isDisabled={
+                !query.data.items.length ||
+                provisionAll.isPending ||
+                provision.isPending ||
+                remove.isPending
+              }
+              isPending={provisionAll.isPending}
+              onPress={() => setProvisionAllOpen(true)}
+            >
+              {t("bots.provisionAll")}
+            </Button>
+          </div>
         }
       >
+        {!probe.data.cloudflareApiTokenConfigured ? (
+          <div className="px-5 py-3 text-xs text-warning">{t("bots.deployWorkerNoToken")}</div>
+        ) : null}
         {query.data.items.length ? (
           query.data.items.map((bot) => (
             <SettingsRow
@@ -260,6 +295,25 @@ function BotsSettings() {
         onConfirm={() => {
           if (deleteBot) {
             remove.mutate({ params: { path: { botId: deleteBot.id } } });
+          }
+        }}
+      />
+      <ConfirmDialog
+        open={deployOpen}
+        onOpenChange={(open) => {
+          if (!deployWorker.isPending) setDeployOpen(open);
+        }}
+        title={t("bots.deployWorkerTitle")}
+        message={t("bots.deployWorkerMsg", { count: String(enabledCount) })}
+        confirmLabel={t("bots.deployWorkerConfirm")}
+        isDestructive={false}
+        isPending={deployWorker.isPending}
+        onConfirm={() => {
+          if (!deployWorker.isPending) {
+            deployWorker.mutate({
+              params: { header: { "Idempotency-Key": newIdempotencyKey() } },
+              body: { cloudflareApiToken: "" },
+            });
           }
         }}
       />

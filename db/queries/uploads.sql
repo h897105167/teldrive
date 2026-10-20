@@ -139,6 +139,72 @@ WHERE upload_id = sqlc.arg(upload_id)
   AND lease_token = sqlc.arg(lease_token)
 RETURNING *;
 
+-- name: ClaimUploadPartBot :one
+-- 网关上传（P2）：分块字节经 Cloudflare Worker 直送 Telegram Bot API，服务端只记录元数据。
+-- 与 ClaimUploadPart 的互斥语义一致：stored 或租约未过期的行不允许重 claim。
+-- bot part 无服务端校验和（checksum/salt/block_hashes 恒为 NULL）。
+INSERT INTO /* TEMPLATE: schema */upload_parts (
+    upload_id,
+    part_no,
+    channel_id,
+    plain_size,
+    storage_kind,
+    bot_id,
+    state,
+    lease_token,
+    lease_expires_at
+) VALUES (
+    sqlc.arg(upload_id),
+    sqlc.arg(part_no),
+    sqlc.arg(channel_id),
+    sqlc.arg(plain_size),
+    'bot',
+    sqlc.arg(bot_id),
+    'uploading',
+    sqlc.arg(lease_token),
+    sqlc.arg(lease_expires_at)
+)
+ON CONFLICT (upload_id, part_no) DO UPDATE
+SET channel_id = EXCLUDED.channel_id,
+    plain_size = EXCLUDED.plain_size,
+    storage_kind = EXCLUDED.storage_kind,
+    bot_id = EXCLUDED.bot_id,
+    telegram_file_id = NULL,
+    message_id = NULL,
+    stored_size = NULL,
+    checksum = NULL,
+    salt = NULL,
+    block_hashes = NULL,
+    state = 'uploading',
+    lease_token = EXCLUDED.lease_token,
+    lease_expires_at = EXCLUDED.lease_expires_at,
+    last_error_code = NULL,
+    updated_at = now()
+WHERE /* TEMPLATE: schema */upload_parts.state <> 'stored'
+  AND (
+    /* TEMPLATE: schema */upload_parts.lease_expires_at IS NULL
+    OR /* TEMPLATE: schema */upload_parts.lease_expires_at < now()
+  )
+RETURNING *;
+
+-- name: MarkUploadPartStoredBot :one
+-- Worker 回调落库：仅在租约仍持有且确为 bot part 时生效，telegram_file_id 绝不暴露给客户端。
+UPDATE /* TEMPLATE: schema */upload_parts
+SET message_id = sqlc.arg(message_id),
+    stored_size = sqlc.arg(stored_size),
+    telegram_file_id = sqlc.arg(telegram_file_id),
+    state = 'stored',
+    lease_token = NULL,
+    lease_expires_at = NULL,
+    last_error_code = NULL,
+    updated_at = now()
+WHERE upload_id = sqlc.arg(upload_id)
+  AND part_no = sqlc.arg(part_no)
+  AND state = 'uploading'
+  AND lease_token = sqlc.arg(lease_token)
+  AND storage_kind = 'bot'
+RETURNING *;
+
 -- name: RenewUploadPartLease :execrows
 UPDATE /* TEMPLATE: schema */upload_parts
 SET lease_expires_at = sqlc.arg(lease_expires_at),
@@ -267,7 +333,10 @@ INSERT INTO /* TEMPLATE: schema */file_parts (
     stored_size,
     checksum,
     salt,
-    block_hashes
+    block_hashes,
+    storage_kind,
+    bot_id,
+    telegram_file_id
 )
 SELECT
     sqlc.arg(file_id),
@@ -278,7 +347,10 @@ SELECT
     stored_size,
     checksum,
     salt,
-    block_hashes
+    block_hashes,
+    storage_kind,
+    bot_id,
+    telegram_file_id
 FROM /* TEMPLATE: schema */upload_parts
 WHERE upload_id = sqlc.arg(upload_id)
   AND state = 'stored'

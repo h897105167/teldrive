@@ -118,6 +118,30 @@ type Cache struct {
 	Memory MemoryCache `koanf:"memory"`
 }
 
+type Gateway struct {
+	Enabled   bool          `koanf:"enabled" default:"false" description:"Serve download bytes directly from the Cloudflare gateway Worker instead of this server"`
+	PublicURL string        `koanf:"public-url" default:"" description:"Gateway Worker base URL used in download redirects (for example https://name.workers.dev)"`
+	OriginURL string        `koanf:"origin-url" default:"" description:"Control-plane origin reached by the gateway Worker for manifest / upload-complete callbacks; falls back to public-url when empty. Set this when public-url points at the Worker while the API stays on a different host (for example https://teldrive.example.com)"`
+	Secret    string        `koanf:"secret" default:"" description:"HMAC secret shared with the gateway Worker (GATEWAY_SECRET)"`
+	TicketTTL time.Duration `koanf:"ticket-ttl" default:"10m" validate:"gt=0" description:"Lifetime of gateway download tickets"`
+	WorkerMinBytes int64 `koanf:"worker-min-bytes" default:"0" description:"Downloads smaller than this many bytes stay on this server instead of the gateway Worker; 0 sends every gateway-eligible file to the Worker. Small files suffer the Worker's extra hop latency, so set this to e.g. 16777216 to keep thumbnails and images on the direct path"`
+	BotSlots  []string      `koanf:"bot-slots" default:"" description:"Comma-separated Telegram bot numeric IDs in slot order; slot n uses entry n"`
+}
+
+type Cloudflare struct {
+	// api-token-ciphertext is the base64-encoded secureblob ciphertext of
+	// the Cloudflare API token.  The server encrypts it on save (using
+	// security.data-key) and never exposes the plaintext back to clients.
+	APITokenCiphertext string `koanf:"api-token-ciphertext" default:"" description:"Encrypted Cloudflare API token (base64 secureblob ciphertext). Leave empty until a token is saved via POST /v1/settings/worker-deploy"`
+
+	// bundle-path points at the pre-built Worker JS bundle on disk.  The
+	// bundle is produced by `bun build worker/src/index.ts --format esm
+	// --outfile <path>` and copied here during deployment packaging.
+	// Empty falls back to $XDG_DATA_HOME/teldrive/worker/index.js (or
+	// /usr/local/share/teldrive/worker/index.js on Linux).
+	BundlePath string `koanf:"bundle-path" default:"" description:"Path to the Cloudflare Worker bundled JavaScript file (ESM). Defaults to /usr/local/share/teldrive/worker/index.js on Linux."`
+}
+
 type Config struct {
 	HTTP       HTTP            `koanf:"http"`
 	Database   database.Config `koanf:"database"`
@@ -129,6 +153,8 @@ type Config struct {
 	Uploads    Uploads         `koanf:"uploads"`
 	Jobs       Jobs            `koanf:"jobs"`
 	Cache      Cache           `koanf:"cache"`
+	Gateway    Gateway         `koanf:"gateway"`
+	Cloudflare Cloudflare      `koanf:"cloudflare"`
 }
 
 func Default() Config {
@@ -195,6 +221,23 @@ func (c Config) Validate() error {
 	}
 	if c.Events.ReconnectMax < c.Events.ReconnectMin {
 		problems = append(problems, "event reconnect maximum must not be less than minimum")
+	}
+
+	if c.Gateway.Enabled {
+		if strings.TrimSpace(c.Gateway.Secret) == "" {
+			problems = append(problems, "gateway secret is required when the gateway is enabled")
+		}
+		if strings.TrimSpace(c.Gateway.PublicURL) == "" {
+			problems = append(problems, "gateway public URL is required when the gateway is enabled")
+		}
+		if len(c.Gateway.BotSlots) == 0 {
+			problems = append(problems, "gateway bot slots must contain at least one Telegram bot ID when the gateway is enabled")
+		}
+		for _, slot := range c.Gateway.BotSlots {
+			if _, err := strconv.ParseInt(strings.TrimSpace(slot), 10, 64); err != nil {
+				problems = append(problems, fmt.Sprintf("gateway bot slot %q must be a numeric Telegram bot ID", slot))
+			}
+		}
 	}
 	if len(problems) > 0 {
 		slices.Sort(problems)

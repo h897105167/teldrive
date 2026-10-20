@@ -24,6 +24,7 @@ require (
 	github.com/knadh/koanf/v2 v2.3.7
 	github.com/mattn/go-isatty v0.0.24
 	github.com/ogen-go/ogen v1.24.0
+	github.com/pelletier/go-toml v1.9.5
 	github.com/pressly/goose/v3 v3.28.0
 	github.com/riverqueue/river v0.48.0
 	github.com/riverqueue/river/riverdriver v0.48.0
@@ -65,7 +66,6 @@ require (
 	github.com/mfridman/interpolate v0.0.2 // indirect
 	github.com/mitchellh/copystructure v1.2.0 // indirect
 	github.com/mitchellh/reflectwalk v1.0.2 // indirect
-	github.com/pelletier/go-toml v1.9.5 // indirect
 	github.com/refraction-networking/utls v1.8.2 // indirect
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.48.0 // indirect
 	github.com/riverqueue/river/rivershared v0.48.0 // indirect

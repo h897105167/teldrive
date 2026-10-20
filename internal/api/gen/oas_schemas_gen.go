@@ -1403,6 +1403,30 @@ type DeletePeriodicJobUnauthorized ErrorEnvelope
 
 func (*DeletePeriodicJobUnauthorized) deletePeriodicJobRes() {}
 
+type DeployWorkerBadRequest ErrorEnvelope
+
+func (*DeployWorkerBadRequest) deployWorkerRes() {}
+
+type DeployWorkerConflict ErrorEnvelope
+
+func (*DeployWorkerConflict) deployWorkerRes() {}
+
+type DeployWorkerForbidden ErrorEnvelope
+
+func (*DeployWorkerForbidden) deployWorkerRes() {}
+
+type DeployWorkerNotFound ErrorEnvelope
+
+func (*DeployWorkerNotFound) deployWorkerRes() {}
+
+type DeployWorkerUnauthorized ErrorEnvelope
+
+func (*DeployWorkerUnauthorized) deployWorkerRes() {}
+
+type DeployWorkerUnprocessableEntity ErrorEnvelope
+
+func (*DeployWorkerUnprocessableEntity) deployWorkerRes() {}
+
 type DiscoverChannelsOKApplicationJSON []DiscoveredChannel
 
 func (*DiscoverChannelsOKApplicationJSON) discoverChannelsRes() {}
@@ -5140,6 +5164,56 @@ func (s *FolderCreateRequestConflictPolicy) UnmarshalText(data []byte) error {
 	default:
 		return errors.Errorf("invalid value: %q", data)
 	}
+}
+
+// Gateway data-plane settings surfaced in the settings UI.
+// Ref: #/components/schemas/GatewaySettings
+type GatewaySettings struct {
+	// True when the gateway data plane (Cloudflare Worker) is configured.
+	GatewayEnabled bool `json:"gatewayEnabled"`
+	// Downloads smaller than this many bytes stay on the origin server instead of being redirected to the
+	// Cloudflare Worker: small files (thumbnails, images) suffer the Worker's extra edge hop. `0` routes
+	// every gateway-eligible file through the Worker.
+	WorkerMinBytes int64 `json:"workerMinBytes"`
+}
+
+// GetGatewayEnabled returns the value of GatewayEnabled.
+func (s *GatewaySettings) GetGatewayEnabled() bool {
+	return s.GatewayEnabled
+}
+
+// GetWorkerMinBytes returns the value of WorkerMinBytes.
+func (s *GatewaySettings) GetWorkerMinBytes() int64 {
+	return s.WorkerMinBytes
+}
+
+// SetGatewayEnabled sets the value of GatewayEnabled.
+func (s *GatewaySettings) SetGatewayEnabled(val bool) {
+	s.GatewayEnabled = val
+}
+
+// SetWorkerMinBytes sets the value of WorkerMinBytes.
+func (s *GatewaySettings) SetWorkerMinBytes(val int64) {
+	s.WorkerMinBytes = val
+}
+
+func (*GatewaySettings) updateGatewaySettingsRes() {}
+
+// Mutable gateway settings.
+// Ref: #/components/schemas/GatewaySettingsUpdate
+type GatewaySettingsUpdate struct {
+	// New download-split threshold in bytes. Must be zero or positive.
+	WorkerMinBytes int64 `json:"workerMinBytes"`
+}
+
+// GetWorkerMinBytes returns the value of WorkerMinBytes.
+func (s *GatewaySettingsUpdate) GetWorkerMinBytes() int64 {
+	return s.WorkerMinBytes
+}
+
+// SetWorkerMinBytes sets the value of WorkerMinBytes.
+func (s *GatewaySettingsUpdate) SetWorkerMinBytes(val int64) {
+	s.WorkerMinBytes = val
 }
 
 type GetFileCategoryStatisticsOKApplicationJSON []FileCategoryStatistics
@@ -9818,6 +9892,30 @@ func (s *PeriodicJobUpdateArgs) init() PeriodicJobUpdateArgs {
 	return m
 }
 
+type PrepareUploadPartGatewayBadRequest ErrorEnvelope
+
+func (*PrepareUploadPartGatewayBadRequest) prepareUploadPartGatewayRes() {}
+
+type PrepareUploadPartGatewayConflict ErrorEnvelope
+
+func (*PrepareUploadPartGatewayConflict) prepareUploadPartGatewayRes() {}
+
+type PrepareUploadPartGatewayGone ErrorEnvelope
+
+func (*PrepareUploadPartGatewayGone) prepareUploadPartGatewayRes() {}
+
+type PrepareUploadPartGatewayNotFound ErrorEnvelope
+
+func (*PrepareUploadPartGatewayNotFound) prepareUploadPartGatewayRes() {}
+
+type PrepareUploadPartGatewayNotImplemented ErrorEnvelope
+
+func (*PrepareUploadPartGatewayNotImplemented) prepareUploadPartGatewayRes() {}
+
+type PrepareUploadPartGatewayUnauthorized ErrorEnvelope
+
+func (*PrepareUploadPartGatewayUnauthorized) prepareUploadPartGatewayRes() {}
+
 type ProvisionBotNotFound ErrorEnvelope
 
 func (*ProvisionBotNotFound) provisionBotRes() {}
@@ -10298,6 +10396,35 @@ func (s *SessionSummary) SetExpiresAt(val time.Time) {
 // SetRevokedAt sets the value of RevokedAt.
 func (s *SessionSummary) SetRevokedAt(val OptDateTime) {
 	s.RevokedAt = val
+}
+
+// Write-only settings probe — never returns secrets.
+// Ref: #/components/schemas/SettingsProbe
+type SettingsProbe struct {
+	// True once a Cloudflare API token has been saved (encrypted).
+	CloudflareApiTokenConfigured bool `json:"cloudflareApiTokenConfigured"`
+	// True when the gateway is currently pointed at a Worker URL.
+	GatewayEnabled bool `json:"gatewayEnabled"`
+}
+
+// GetCloudflareApiTokenConfigured returns the value of CloudflareApiTokenConfigured.
+func (s *SettingsProbe) GetCloudflareApiTokenConfigured() bool {
+	return s.CloudflareApiTokenConfigured
+}
+
+// GetGatewayEnabled returns the value of GatewayEnabled.
+func (s *SettingsProbe) GetGatewayEnabled() bool {
+	return s.GatewayEnabled
+}
+
+// SetCloudflareApiTokenConfigured sets the value of CloudflareApiTokenConfigured.
+func (s *SettingsProbe) SetCloudflareApiTokenConfigured(val bool) {
+	s.CloudflareApiTokenConfigured = val
+}
+
+// SetGatewayEnabled sets the value of GatewayEnabled.
+func (s *SettingsProbe) SetGatewayEnabled(val bool) {
+	s.GatewayEnabled = val
 }
 
 // Ref: #/components/schemas/ShareCreateRequest
@@ -11834,6 +11961,22 @@ type UpdateFileUnprocessableEntity ErrorEnvelope
 
 func (*UpdateFileUnprocessableEntity) updateFileRes() {}
 
+type UpdateGatewaySettingsBadRequest ErrorEnvelope
+
+func (*UpdateGatewaySettingsBadRequest) updateGatewaySettingsRes() {}
+
+type UpdateGatewaySettingsInternalServerError ErrorEnvelope
+
+func (*UpdateGatewaySettingsInternalServerError) updateGatewaySettingsRes() {}
+
+type UpdateGatewaySettingsUnauthorized ErrorEnvelope
+
+func (*UpdateGatewaySettingsUnauthorized) updateGatewaySettingsRes() {}
+
+type UpdateGatewaySettingsUnprocessableEntity ErrorEnvelope
+
+func (*UpdateGatewaySettingsUnprocessableEntity) updateGatewaySettingsRes() {}
+
 type UpdatePeriodicJobBadRequest ErrorEnvelope
 
 func (*UpdatePeriodicJobBadRequest) updatePeriodicJobRes() {}
@@ -12411,6 +12554,53 @@ func (s *UploadPart) SetCreatedAt(val time.Time) {
 func (s *UploadPart) SetUpdatedAt(val time.Time) {
 	s.UpdatedAt = val
 }
+
+// Ref: #/components/schemas/UploadPartGatewayRequest
+type UploadPartGatewayRequest struct {
+	// Plaintext size of the part in bytes. Must equal the session part size (or the remainder of the final
+	// part).
+	Size int64 `json:"size"`
+}
+
+// GetSize returns the value of Size.
+func (s *UploadPartGatewayRequest) GetSize() int64 {
+	return s.Size
+}
+
+// SetSize sets the value of Size.
+func (s *UploadPartGatewayRequest) SetSize(val int64) {
+	s.Size = val
+}
+
+// Ref: #/components/schemas/UploadPartGatewayResponse
+type UploadPartGatewayResponse struct {
+	// Data-plane URL the client PUTs the part bytes to. Absent when `stored` is true.
+	UploadUrl OptURI `json:"uploadUrl"`
+	// True when the part is already stored; the client must skip the upload.
+	Stored OptBool `json:"stored"`
+}
+
+// GetUploadUrl returns the value of UploadUrl.
+func (s *UploadPartGatewayResponse) GetUploadUrl() OptURI {
+	return s.UploadUrl
+}
+
+// GetStored returns the value of Stored.
+func (s *UploadPartGatewayResponse) GetStored() OptBool {
+	return s.Stored
+}
+
+// SetUploadUrl sets the value of UploadUrl.
+func (s *UploadPartGatewayResponse) SetUploadUrl(val OptURI) {
+	s.UploadUrl = val
+}
+
+// SetStored sets the value of Stored.
+func (s *UploadPartGatewayResponse) SetStored(val OptBool) {
+	s.Stored = val
+}
+
+func (*UploadPartGatewayResponse) prepareUploadPartGatewayRes() {}
 
 // Ref: #/components/schemas/UploadPartState
 type UploadPartState string
@@ -13159,3 +13349,79 @@ func (s *ViewerKind) UnmarshalText(data []byte) error {
 		return errors.Errorf("invalid value: %q", data)
 	}
 }
+
+// Request body for one-click Cloudflare Worker deployment.
+// Ref: #/components/schemas/WorkerDeployRequest
+type WorkerDeployRequest struct {
+	// Cloudflare API token with Workers Scripts:Edit, Workers Routes:Edit, Zone:Read, DNS:Edit, and
+	// Account:Read permissions. Sent once and encrypted server-side; subsequent reads return no value.
+	CloudflareApiToken string `json:"cloudflareApiToken"`
+	// Optional DNS zone to create a `teldrive.` subdomain on (e.g. `example.com`). When provided the token
+	// must also have DNS:Edit permission; the backend will create an A record `teldrive.{zone}` pointing
+	// at the VPS public IP and bind the Worker to that hostname. Leave empty to skip DNS creation and bind
+	// the Worker to the existing `teldrive-gateway.{zone}` hostname on the first zone.
+	TargetZone OptString `json:"targetZone"`
+}
+
+// GetCloudflareApiToken returns the value of CloudflareApiToken.
+func (s *WorkerDeployRequest) GetCloudflareApiToken() string {
+	return s.CloudflareApiToken
+}
+
+// GetTargetZone returns the value of TargetZone.
+func (s *WorkerDeployRequest) GetTargetZone() OptString {
+	return s.TargetZone
+}
+
+// SetCloudflareApiToken sets the value of CloudflareApiToken.
+func (s *WorkerDeployRequest) SetCloudflareApiToken(val string) {
+	s.CloudflareApiToken = val
+}
+
+// SetTargetZone sets the value of TargetZone.
+func (s *WorkerDeployRequest) SetTargetZone(val OptString) {
+	s.TargetZone = val
+}
+
+// Successful worker deployment response.
+// Ref: #/components/schemas/WorkerDeployResponse
+type WorkerDeployResponse struct {
+	// Fully-qualified Worker base URL (e.g. https://teldrive-gateway.example.com).
+	WorkerUrl string `json:"workerUrl"`
+	// DNS zone name that hosts the Worker (e.g. example.com).
+	ZoneName string `json:"zoneName"`
+	// Cloudflare account ID that owns the Worker.
+	AccountId string `json:"accountId"`
+}
+
+// GetWorkerUrl returns the value of WorkerUrl.
+func (s *WorkerDeployResponse) GetWorkerUrl() string {
+	return s.WorkerUrl
+}
+
+// GetZoneName returns the value of ZoneName.
+func (s *WorkerDeployResponse) GetZoneName() string {
+	return s.ZoneName
+}
+
+// GetAccountId returns the value of AccountId.
+func (s *WorkerDeployResponse) GetAccountId() string {
+	return s.AccountId
+}
+
+// SetWorkerUrl sets the value of WorkerUrl.
+func (s *WorkerDeployResponse) SetWorkerUrl(val string) {
+	s.WorkerUrl = val
+}
+
+// SetZoneName sets the value of ZoneName.
+func (s *WorkerDeployResponse) SetZoneName(val string) {
+	s.ZoneName = val
+}
+
+// SetAccountId sets the value of AccountId.
+func (s *WorkerDeployResponse) SetAccountId(val string) {
+	s.AccountId = val
+}
+
+func (*WorkerDeployResponse) deployWorkerRes() {}

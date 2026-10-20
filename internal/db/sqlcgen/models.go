@@ -183,6 +183,48 @@ func (ns NullNameConflictPolicy) Value() (driver.Value, error) {
 	return string(ns.NameConflictPolicy), nil
 }
 
+type PartStorageKind string
+
+const (
+	PartStorageKindMtproto PartStorageKind = "mtproto"
+	PartStorageKindBot     PartStorageKind = "bot"
+)
+
+func (e *PartStorageKind) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = PartStorageKind(s)
+	case string:
+		*e = PartStorageKind(s)
+	default:
+		return fmt.Errorf("unsupported scan type for PartStorageKind: %T", src)
+	}
+	return nil
+}
+
+type NullPartStorageKind struct {
+	PartStorageKind PartStorageKind `json:"part_storage_kind"`
+	Valid           bool            `json:"valid"` // Valid is true if PartStorageKind is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullPartStorageKind) Scan(value interface{}) error {
+	if value == nil {
+		ns.PartStorageKind, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.PartStorageKind.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullPartStorageKind) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.PartStorageKind), nil
+}
+
 type SharePermission string
 
 const (
@@ -511,7 +553,10 @@ type FilePart struct {
 	Salt       pgtype.Text        `json:"salt"`
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 	// Concatenated 32-byte BLAKE3 hashes for each 16 MiB plaintext block in this finalized part.
-	BlockHashes []byte `json:"block_hashes"`
+	BlockHashes    []byte          `json:"block_hashes"`
+	StorageKind    PartStorageKind `json:"storage_kind"`
+	BotID          pgtype.Int8     `json:"bot_id"`
+	TelegramFileID pgtype.Text     `json:"telegram_file_id"`
 }
 
 type FileShare struct {
@@ -598,7 +643,10 @@ type UploadPart struct {
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 	// Concatenated 32-byte BLAKE3 hashes for each 16 MiB plaintext block in this upload part.
-	BlockHashes []byte `json:"block_hashes"`
+	BlockHashes    []byte          `json:"block_hashes"`
+	StorageKind    PartStorageKind `json:"storage_kind"`
+	BotID          pgtype.Int8     `json:"bot_id"`
+	TelegramFileID pgtype.Text     `json:"telegram_file_id"`
 }
 
 type UploadSession struct {

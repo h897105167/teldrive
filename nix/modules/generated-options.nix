@@ -403,4 +403,31 @@
       };
     };
   };
+  "gateway" = {
+    "enabled" = lib.mkOption {
+      type = lib.types.nullOr (lib.types.bool);
+      default = null;
+      description = "Serve download bytes directly from the Cloudflare gateway Worker instead of this server (Default: false)";
+    };
+    "public-url" = lib.mkOption {
+      type = lib.types.nullOr (lib.types.str);
+      default = null;
+      description = "Gateway Worker base URL used in download redirects (for example https://name.workers.dev) (No default; upstream applies its own.)";
+    };
+    "secret" = lib.mkOption {
+      type = lib.types.nullOr (lib.types.str);
+      default = null;
+      description = "HMAC secret shared with the gateway Worker (GATEWAY_SECRET) (No default; upstream applies its own.)";
+    };
+    "ticket-ttl" = lib.mkOption {
+      type = lib.types.nullOr (lib.types.str);
+      default = null;
+      description = "Lifetime of gateway download tickets (Default: 10m) [validate: gt=0]";
+    };
+    "bot-slots" = lib.mkOption {
+      type = lib.types.nullOr (lib.types.listOf lib.types.str);
+      default = null;
+      description = "Comma-separated Telegram bot numeric IDs in slot order; slot n uses entry n (No default; upstream applies its own.)";
+    };
+  };
 }

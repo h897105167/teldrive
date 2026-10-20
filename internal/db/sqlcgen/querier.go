@@ -18,6 +18,10 @@ type Querier interface {
 	ActivateBot(ctx context.Context, arg ActivateBotParams) (*Bot, error)
 	AddFileBookmarks(ctx context.Context, arg AddFileBookmarksParams) error
 	ClaimUploadPart(ctx context.Context, arg ClaimUploadPartParams) (*UploadPart, error)
+	// 网关上传（P2）：分块字节经 Cloudflare Worker 直送 Telegram Bot API，服务端只记录元数据。
+	// 与 ClaimUploadPart 的互斥语义一致：stored 或租约未过期的行不允许重 claim。
+	// bot part 无服务端校验和（checksum/salt/block_hashes 恒为 NULL）。
+	ClaimUploadPartBot(ctx context.Context, arg ClaimUploadPartBotParams) (*UploadPart, error)
 	ClearSelectedChannel(ctx context.Context, userID int64) error
 	ClearUploadSessionParentsByFileIDs(ctx context.Context, arg ClearUploadSessionParentsByFileIDsParams) error
 	CompleteIdempotencyKey(ctx context.Context, arg CompleteIdempotencyKeyParams) (*IdempotencyKey, error)
@@ -154,6 +158,8 @@ type Querier interface {
 	MarkUploadCompleting(ctx context.Context, arg MarkUploadCompletingParams) (*UploadSession, error)
 	MarkUploadPartFailed(ctx context.Context, arg MarkUploadPartFailedParams) (*UploadPart, error)
 	MarkUploadPartStored(ctx context.Context, arg MarkUploadPartStoredParams) (*UploadPart, error)
+	// Worker 回调落库：仅在租约仍持有且确为 bot part 时生效，telegram_file_id 绝不暴露给客户端。
+	MarkUploadPartStoredBot(ctx context.Context, arg MarkUploadPartStoredBotParams) (*UploadPart, error)
 	MoveFile(ctx context.Context, arg MoveFileParams) (*File, error)
 	MoveFilesWithNames(ctx context.Context, arg MoveFilesWithNamesParams) ([]*File, error)
 	NextBotSelectionValue(ctx context.Context, arg NextBotSelectionValueParams) (int64, error)

@@ -8,6 +8,7 @@ import "./auth.tsp";
 import "./channels.tsp";
 import "./events.tsp";
 import "./files.tsp";
+import "./settings.tsp";
 import "./uploads.tsp";
 import "./shares.tsp";
 import "./jobs.tsp";

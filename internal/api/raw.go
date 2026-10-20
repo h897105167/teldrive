@@ -139,6 +139,21 @@ func (h *RawHandler) streamFile(ctx context.Context, w http.ResponseWriter, user
 		return nil
 	}
 
+	// 数据面卸载：文件全部由 bot part 组成时，把字节下载 302 到 Cloudflare 网关。
+	// 未命中（未启用 / 未配置 / 存量 mtproto part）时完全保持原有直连行为。
+	if h.handler.Gateway != nil {
+		offset := ""
+		if partial {
+			offset = fmt.Sprintf("%d-%d", rangeSpec.Offset, rangeSpec.Offset+rangeSpec.Length-1)
+		}
+		if location, ok := h.handler.Gateway.ProxyDownload(ctx, userID, fileID, file, offset, attachment); ok {
+			w.Header().Set("Location", location)
+			w.Header().Set("Cache-Control", "no-store")
+			w.WriteHeader(http.StatusFound)
+			return nil
+		}
+	}
+
 	download, err := h.handler.Downloader.Open(ctx, transfer.DownloadRequest{
 		UserID: userID, FileID: fileID, Offset: rangeSpec.Offset, Length: rangeSpec.Length,
 	})

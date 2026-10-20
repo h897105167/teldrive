@@ -14,6 +14,7 @@ import (
 	"github.com/tgdrive/teldrive/v2/internal/catalog"
 	"github.com/tgdrive/teldrive/v2/internal/db/sqlcgen"
 	"github.com/tgdrive/teldrive/v2/internal/dbtypes"
+	"github.com/tgdrive/teldrive/v2/internal/gateway"
 	"github.com/tgdrive/teldrive/v2/internal/shares"
 	"github.com/tgdrive/teldrive/v2/internal/transfer"
 	"github.com/tgdrive/teldrive/v2/internal/uploads"
@@ -532,6 +533,11 @@ func (h *Handler) createUploadForOwner(ctx context.Context, ownerID int64, paren
 	}
 	if value, ok := req.ConflictPolicy.Get(); ok {
 		input.ConflictPolicy = sqlcgen.NameConflictPolicy(value)
+	}
+	// 网关上传卸载（P2）：未加密且未声明期望哈希的会话统一使用 16 MiB 分块，
+	// 使分块具备走 Cloudflare Worker 数据面的资格；其余会话保持调用方指定值。
+	if h.Gateway != nil && h.Gateway.Enabled() && !input.Encryption && input.ExpectedHashAlgorithm == nil {
+		input.PartSize = gateway.PartSize
 	}
 	session, err := h.Uploads.Create(ctx, input)
 	if err != nil {

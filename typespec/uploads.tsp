@@ -146,6 +146,20 @@ model UploadCompletedResponse {
   body: FileEntry;
 }
 
+model UploadPartGatewayRequest {
+  /** Plaintext size of the part in bytes. Must equal the session part size (or the remainder of the final part). */
+  @minValue(0)
+  size: int64;
+}
+
+model UploadPartGatewayResponse {
+  /** Data-plane URL the client PUTs the part bytes to. Absent when `stored` is true. */
+  uploadUrl?: url;
+
+  /** True when the part is already stored; the client must skip the upload. */
+  stored?: boolean;
+}
+
 @tag("Uploads")
 @route("/v1/uploads")
 @useAuth(TelDriveAuth)
@@ -261,6 +275,30 @@ namespace Uploads {
     | ErrorResponse<409>
     | ErrorResponse<410>
     | ErrorResponse<422>;
+
+  /**
+   * Request a short-lived data-plane upload ticket for one part.
+   * When the gateway is enabled and the session is eligible (not encrypted, no expected
+   * hash, 16 MiB part size), the response carries an uploadUrl pointing at the gateway
+   * worker and the client PUTs the bytes there directly; a `stored` response means the
+   * part is already present and must be skipped. 501 signals the client to fall back
+   * to the legacy PUT. Byte streams never traverse this server.
+   */
+  @post
+  @route("/{uploadId}/parts/{partNo}/gateway")
+  @operationId("prepareUploadPartGateway")
+  op preparePartGateway(
+    @path uploadId: Uuid,
+    @path @minValue(1) partNo: int32,
+    @body body: UploadPartGatewayRequest,
+  ):
+    | JsonResponse<200, UploadPartGatewayResponse>
+    | ErrorResponse<400>
+    | ErrorResponse<401>
+    | ErrorResponse<404>
+    | ErrorResponse<409>
+    | ErrorResponse<410>
+    | ErrorResponse<501>;
 
   /** Abort an upload and schedule physical Telegram cleanup. */
   @delete

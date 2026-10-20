@@ -168,6 +168,18 @@ type Handler interface {
 	//
 	// DELETE /v1/periodic-jobs/{periodicJobId}
 	DeletePeriodicJob(ctx context.Context, params DeletePeriodicJobParams) (DeletePeriodicJobRes, error)
+	// DeployWorker implements deployWorker operation.
+	//
+	// One-click Cloudflare Worker deployment. The server validates the supplied API token, uploads the
+	// bundled Worker script with all required secrets (enabled bot tokens + gateway HMAC secret), binds it
+	// to the first DNS zone found on the account as `teldrive-gateway.{zone}`, then atomically updates the
+	// gateway URL.
+	//
+	// Any failure along the way — bad token, missing zone, failed script upload, missing bot tokens —
+	// aborts without modifying the current server configuration.
+	//
+	// POST /v1/settings/worker-deploy
+	DeployWorker(ctx context.Context, req *WorkerDeployRequest, params DeployWorkerParams) (DeployWorkerRes, error)
 	// DiscoverChannels implements discoverChannels operation.
 	//
 	// List broadcast channels where the authenticated user can add administrators. Groups are excluded.
@@ -204,6 +216,12 @@ type Handler interface {
 	//
 	// GET /v1/files/{fileId}/view-state
 	GetFileViewState(ctx context.Context, params GetFileViewStateParams) (GetFileViewStateRes, error)
+	// GetGatewaySettings implements getGatewaySettings operation.
+	//
+	// Read the gateway data-plane settings (download-split threshold).
+	//
+	// GET /v1/settings/gateway
+	GetGatewaySettings(ctx context.Context) (*GatewaySettings, error)
 	// GetJob implements getJob operation.
 	//
 	// GET /v1/jobs/{jobId}
@@ -226,6 +244,12 @@ type Handler interface {
 	//
 	// GET /v1/public/shares/{token}
 	GetPublicShare(ctx context.Context, params GetPublicShareParams) (GetPublicShareRes, error)
+	// GetSettingsProbe implements getSettingsProbe operation.
+	//
+	// Probe stored configuration without leaking secrets.
+	//
+	// GET /v1/settings/probe
+	GetSettingsProbe(ctx context.Context) (*SettingsProbe, error)
 	// GetStorageStats implements getStorageStats operation.
 	//
 	// Return the authenticated user's storage statistics.
@@ -390,6 +414,16 @@ type Handler interface {
 	//
 	// POST /v1/periodic-jobs/{periodicJobId}/pause
 	PausePeriodicJob(ctx context.Context, params PausePeriodicJobParams) (PausePeriodicJobRes, error)
+	// PrepareUploadPartGateway implements prepareUploadPartGateway operation.
+	//
+	// Request a short-lived data-plane upload ticket for one part. When the gateway is enabled and the
+	// session is eligible (not encrypted, no expected hash, 16 MiB part size), the response carries an
+	// uploadUrl pointing at the gateway worker and the client PUTs the bytes there directly; a `stored`
+	// response means the part is already present and must be skipped. 501 signals the client to fall back
+	// to the legacy PUT. Byte streams never traverse this server.
+	//
+	// POST /v1/uploads/{uploadId}/parts/{partNo}/gateway
+	PrepareUploadPartGateway(ctx context.Context, req *UploadPartGatewayRequest, params PrepareUploadPartGatewayParams) (PrepareUploadPartGatewayRes, error)
 	// ProvisionBot implements provisionBot operation.
 	//
 	// Re-verify a saved bot and repair its access to the user's registered channels.
@@ -559,6 +593,13 @@ type Handler interface {
 	//
 	// PATCH /v1/grants/{grantId}
 	UpdateFileAccessGrant(ctx context.Context, req *FileAccessGrantUpdateRequest, params UpdateFileAccessGrantParams) (UpdateFileAccessGrantRes, error)
+	// UpdateGatewaySettings implements updateGatewaySettings operation.
+	//
+	// Hot-update the gateway download-split threshold. Persists `worker-min-bytes` to config.toml and
+	// applies it to the running gateway service immediately, without a restart.
+	//
+	// PUT /v1/settings/gateway
+	UpdateGatewaySettings(ctx context.Context, req *GatewaySettingsUpdate) (UpdateGatewaySettingsRes, error)
 	// UpdatePeriodicJob implements updatePeriodicJob operation.
 	//
 	// PUT /v1/periodic-jobs/{periodicJobId}

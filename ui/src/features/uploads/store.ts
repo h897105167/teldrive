@@ -268,9 +268,8 @@ async function resolveTaskParent(task: UploadTask, signal: AbortSignal) {
   return parentId;
 }
 
-function uploadPart(
-  uploadId: string,
-  partNo: number,
+function uploadToURL(
+  url: string,
   body: Blob,
   signal: AbortSignal,
   onProgress: (uploadedBytes: number) => void,
@@ -278,7 +277,7 @@ function uploadPart(
   return new Promise<void>((resolve, reject) => {
     const request = new XMLHttpRequest();
     const abort = () => request.abort();
-    request.open("PUT", `/api/v1/uploads/${encodeURIComponent(uploadId)}/parts/${partNo}`);
+    request.open("PUT", url);
     request.setRequestHeader("Content-Type", "application/octet-stream");
     request.upload.addEventListener("progress", (event) => {
       if (event.lengthComputable) onProgress(Math.min(event.loaded, body.size));
@@ -318,6 +317,27 @@ function uploadPart(
     }
     request.send(body);
   });
+}
+
+// 网关数据面上传（P2）：向 VPS 申请短时上传票据，成功则把分块直传 Cloudflare Worker，
+// 字节不经过 VPS。网关未启用/会话不合格时由调用方回退 legacy PUT。
+type GatewayUploadGrant = { uploadUrl?: string; stored?: boolean };
+
+async function prepareGatewayUpload(
+  uploadId: string,
+  partNo: number,
+  size: number,
+  signal: AbortSignal,
+): Promise<GatewayUploadGrant> {
+  return jsonRequest<GatewayUploadGrant>(
+    `/v1/uploads/${encodeURIComponent(uploadId)}/parts/${partNo}/gateway`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ size }),
+      signal,
+    },
+  );
 }
 
 function validUploadSession(value: UploadSession) {
@@ -370,6 +390,9 @@ async function runTask(taskId: string) {
       progress: task.size ? Math.round((uploaded / task.size) * 100) : 100,
     });
     const totalParts = task.size === 0 ? 0 : Math.ceil(task.size / session.partSize);
+    // 网关优先：每个 part 先向 VPS 申请短时上传票据，成功则直传 Cloudflare Worker；
+    // 网关未启用或当前会话不合格时（404/409/422/501）本 session 内永久回退 legacy PUT。
+    let gatewayUnavailable = false;
     for (let partNo = 1; partNo <= totalParts; partNo++) {
       if (controller.signal.aborted) throw new DOMException("Upload paused", "AbortError");
       if (stored.has(partNo)) continue;
@@ -377,13 +400,49 @@ async function runTask(taskId: string) {
       const end = Math.min(task.size, start + session.partSize);
       const blob = file.slice(start, end);
       const uploadedBeforePart = uploaded;
-      await uploadPart(session.id, partNo, blob, controller.signal, (partUploadedBytes) => {
+      const reportProgress = (partUploadedBytes: number) => {
         const currentUploaded = uploadedBeforePart + partUploadedBytes;
         store.patchTask(taskId, {
           uploadedBytes: currentUploaded,
           progress: task.size ? Math.round((currentUploaded / task.size) * 100) : 100,
         });
-      });
+      };
+      if (!gatewayUnavailable) {
+        try {
+          const grant = await prepareGatewayUpload(session.id, partNo, blob.size, controller.signal);
+          if (grant.stored) {
+            uploaded = uploadedBeforePart + blob.size;
+            store.patchTask(taskId, {
+              uploadedBytes: uploaded,
+              progress: task.size ? Math.round((uploaded / task.size) * 100) : 100,
+            });
+            continue;
+          }
+          if (grant.uploadUrl) {
+            await uploadToURL(grant.uploadUrl, blob, controller.signal, reportProgress);
+            uploaded = uploadedBeforePart + blob.size;
+            store.patchTask(taskId, {
+              uploadedBytes: uploaded,
+              progress: task.size ? Math.round((uploaded / task.size) * 100) : 100,
+            });
+            continue;
+          }
+          gatewayUnavailable = true;
+        } catch (error) {
+          if (controller.signal.aborted) throw error;
+          if ([404, 409, 422, 501].includes(normalizeApiError(error).status)) {
+            gatewayUnavailable = true;
+          } else {
+            throw error;
+          }
+        }
+      }
+      await uploadToURL(
+        `/api/v1/uploads/${encodeURIComponent(session.id)}/parts/${partNo}`,
+        blob,
+        controller.signal,
+        reportProgress,
+      );
       uploaded = uploadedBeforePart + blob.size;
       store.patchTask(taskId, {
         uploadedBytes: uploaded,

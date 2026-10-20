@@ -65,6 +65,66 @@ func TestValidateRejectsInvalidTrustedProxy(t *testing.T) {
 	}
 }
 
+func TestGatewayDefaults(t *testing.T) {
+	t.Parallel()
+	cfg := Default()
+	if cfg.Gateway.Enabled || cfg.Gateway.PublicURL != "" || cfg.Gateway.Secret != "" {
+		t.Fatalf("gateway defaults = %+v", cfg.Gateway)
+	}
+	if cfg.Gateway.TicketTTL != 10*time.Minute {
+		t.Fatalf("gateway ticket TTL = %s, want 10m", cfg.Gateway.TicketTTL)
+	}
+	if len(cfg.Gateway.BotSlots) != 0 {
+		t.Fatalf("gateway bot slots = %v, want empty", cfg.Gateway.BotSlots)
+	}
+}
+
+func TestValidateGatewayConfiguration(t *testing.T) {
+	t.Parallel()
+	enabled := func() Config {
+		cfg := validTestConfig()
+		cfg.Gateway.Enabled = true
+		cfg.Gateway.PublicURL = "https://gw.workers.dev"
+		cfg.Gateway.Secret = "shared-secret"
+		cfg.Gateway.BotSlots = []string{"8430828351", "8663276280"}
+		return cfg
+	}
+
+	t.Run("complete configuration passes", func(t *testing.T) {
+		t.Parallel()
+		if err := enabled().Validate(); err != nil {
+			t.Fatalf("Validate() error = %v", err)
+		}
+	})
+
+	tests := map[string]func(*Config){
+		"missing secret":     func(cfg *Config) { cfg.Gateway.Secret = " " },
+		"missing public url": func(cfg *Config) { cfg.Gateway.PublicURL = "" },
+		"no bot slots":       func(cfg *Config) { cfg.Gateway.BotSlots = nil },
+		"empty bot slot":     func(cfg *Config) { cfg.Gateway.BotSlots = []string{"8430828351", ""} },
+		"non numeric slot":   func(cfg *Config) { cfg.Gateway.BotSlots = []string{"bot-name"} },
+		"zero ticket ttl":    func(cfg *Config) { cfg.Gateway.TicketTTL = 0 },
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			cfg := enabled()
+			mutate(&cfg)
+			if err := cfg.Validate(); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("Validate() error = %v, want ErrInvalid", err)
+			}
+		})
+	}
+
+	t.Run("disabled gateway ignores gateway settings", func(t *testing.T) {
+		t.Parallel()
+		cfg := validTestConfig()
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate() error = %v", err)
+		}
+	})
+}
+
 func TestLoadFromAppliesEnvironment(t *testing.T) {
 	t.Parallel()
 	values := map[string]string{
@@ -303,7 +363,7 @@ security:
 	}); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := loader.Load(flags)
+	cfg, _, err := loader.Load(flags)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -334,7 +394,7 @@ func TestLoaderRejectsUnsupportedConfigExtension(t *testing.T) {
 	if err := flags.Parse([]string{"--config", path}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loader.Load(flags); !errors.Is(err, ErrInvalid) {
+	if _, _, err := loader.Load(flags); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("Load() error = %v", err)
 	}
 }

@@ -88,10 +88,18 @@ func readWebUIFile(files fs.FS, name string) (*bytes.Reader, fs.FileInfo, error)
 	return bytes.NewReader(content), stat, nil
 }
 
-func routeApplication(router chi.Router, apiServer http.Handler, ui http.Handler) {
+// routeApplication wires the generated API server, the optional gateway internal
+// endpoints (data plane self-authenticates with a ticket), and the SPA fallback.
+func routeApplication(router chi.Router, apiServer http.Handler, ui http.Handler, gatewayManifest http.Handler, gatewayUploadComplete http.Handler) {
 	router.Handle("/api/*", http.StripPrefix("/api", apiServer))
 	router.Handle("/v1/*", apiServer)
 	router.Handle("/health/*", apiServer)
+	if gatewayManifest != nil {
+		router.Handle("/internal/gateway/manifest", gatewayManifest)
+	}
+	if gatewayUploadComplete != nil {
+		router.Handle("/internal/gateway/upload-complete", gatewayUploadComplete)
+	}
 	if ui != nil {
 		router.Handle("/*", ui)
 		return

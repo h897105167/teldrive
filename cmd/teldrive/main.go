@@ -52,7 +52,7 @@ func newRunCommand() *cobra.Command {
 		Short:   "Start the TelDrive server",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, err := loader.Load(cmd.Flags())
+			cfg, configPath, err := loader.Load(cmd.Flags())
 			if err != nil {
 				return err
 			}
@@ -62,7 +62,7 @@ func newRunCommand() *cobra.Command {
 			}
 			defer closeLog()
 			slog.SetDefault(logger)
-			application, err := app.New(cmd.Context(), cfg, app.Dependencies{Logger: logger, Version: buildVersion()})
+			application, err := app.New(cmd.Context(), cfg, app.Dependencies{Logger: logger, Version: buildVersion(), ConfigPath: configPath})
 			if err != nil {
 				return fmt.Errorf("initialize TelDrive: %w", err)
 			}
@@ -86,7 +86,7 @@ func newCheckCommand() *cobra.Command {
 		Short: "Validate configuration and initialize dependencies",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, err := loader.Load(cmd.Flags())
+			cfg, _, err := loader.Load(cmd.Flags())
 			if err != nil {
 				return err
 			}

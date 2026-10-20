@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/tgdrive/teldrive/v2/internal/catalog"
 	"github.com/tgdrive/teldrive/v2/internal/db/sqlcgen"
 	"github.com/tgdrive/teldrive/v2/internal/dbtypes"
+	"github.com/tgdrive/teldrive/v2/internal/gateway"
 	"github.com/tgdrive/teldrive/v2/internal/shares"
 	"github.com/tgdrive/teldrive/v2/internal/transfer"
 	"github.com/tgdrive/teldrive/v2/internal/uploads"
@@ -587,6 +589,55 @@ func (h *Handler) AbortUpload(ctx context.Context, params gen.AbortUploadParams)
 		return nil, mapServiceError(err)
 	}
 	return &gen.AbortUploadNoContent{}, nil
+}
+
+// PrepareUploadPartGateway 签发数据面上传票据：符合条件的分块由客户端直传 Cloudflare Worker，
+// 字节不经过本服务。网关未启用或会话不满足资格时返回 501，客户端回退 legacy PUT。
+func (h *Handler) PrepareUploadPartGateway(ctx context.Context, req *gen.UploadPartGatewayRequest, params gen.PrepareUploadPartGatewayParams) (gen.PrepareUploadPartGatewayRes, error) {
+	if h.Uploads == nil || req == nil {
+		return nil, mapServiceError(ErrOperationUnavailable)
+	}
+	if h.Gateway == nil || !h.Gateway.Enabled() {
+		return nil, problem(http.StatusNotImplemented, "gateway_upload_unavailable", "upload gateway is not enabled", nil)
+	}
+	ownerID, err := h.resolveAuthenticatedUploadOwner(ctx, googleUUID(params.UploadId), true)
+	if err != nil {
+		return nil, mapServiceError(err)
+	}
+	session, err := h.Uploads.Get(ctx, ownerID, googleUUID(params.UploadId))
+	if err != nil {
+		return nil, mapServiceError(err)
+	}
+	if !gateway.UploadEligible(session) {
+		return nil, problem(http.StatusNotImplemented, "gateway_upload_ineligible", "upload session is not eligible for gateway upload", nil)
+	}
+	botID, botSlot, ok := h.Gateway.SelectBotSlot()
+	if !ok {
+		return nil, mapServiceError(ErrOperationUnavailable)
+	}
+	channelID, err := h.Channels.Resolve(ctx, ownerID, 0)
+	if err != nil {
+		return nil, mapServiceError(err)
+	}
+	result, err := h.Uploads.ClaimPartBot(ctx, uploads.ClaimPartBotInput{
+		UserID: ownerID, UploadID: googleUUID(params.UploadId), PartNo: params.PartNo,
+		ChannelID: channelID, PlainSize: req.Size, BotID: botID, LeaseTTL: h.Gateway.TicketTTL(),
+	})
+	if err != nil {
+		return nil, mapServiceError(err)
+	}
+	if result.Existing {
+		return &gen.UploadPartGatewayResponse{Stored: gen.NewOptBool(true)}, nil
+	}
+	uploadURL, ok := h.Gateway.UploadURL(ownerID, googleUUID(params.UploadId), int(params.PartNo), botSlot, req.Size, result.LeaseToken)
+	if !ok {
+		return nil, mapServiceError(ErrOperationUnavailable)
+	}
+	parsed, err := url.Parse(uploadURL)
+	if err != nil {
+		return nil, mapServiceError(err)
+	}
+	return &gen.UploadPartGatewayResponse{UploadUrl: gen.NewOptURI(*parsed)}, nil
 }
 
 func (h *Handler) HeadFile(ctx context.Context, params gen.HeadFileParams) (gen.HeadFileRes, error) {

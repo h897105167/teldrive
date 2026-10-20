@@ -63,40 +63,40 @@ func (l *Loader) RegisterFlags(flags *pflag.FlagSet) {
 
 // Load applies sources in the same precedence order as the original TelDrive:
 // defaults < config file < environment variables < explicitly changed flags.
-func (l *Loader) Load(flags *pflag.FlagSet) (Config, error) {
+func (l *Loader) Load(flags *pflag.FlagSet) (Config, string, error) {
 	if l == nil || l.lookup == nil || l.homeDir == nil {
-		return Config{}, fmt.Errorf("%w: configuration loader is not initialized", ErrInvalid)
+		return Config{}, "", fmt.Errorf("%w: configuration loader is not initialized", ErrInvalid)
 	}
 	if flags == nil {
-		return Config{}, fmt.Errorf("%w: flag set is required", ErrInvalid)
+		return Config{}, "", fmt.Errorf("%w: flag set is required", ErrInvalid)
 	}
 
 	k := koanf.New(".")
 	if err := k.Load(staticProvider{values: defaultsMap(Default())}, nil); err != nil {
-		return Config{}, fmt.Errorf("load configuration defaults: %w", err)
+		return Config{}, "", fmt.Errorf("load configuration defaults: %w", err)
 	}
 
 	configPath, err := l.resolveConfigPath(flags)
 	if err != nil {
-		return Config{}, err
+		return Config{}, "", err
 	}
 	if configPath != "" {
 		parser, err := parserForPath(configPath)
 		if err != nil {
-			return Config{}, err
+			return Config{}, "", err
 		}
 		if err := k.Load(file.Provider(configPath), parser); err != nil {
-			return Config{}, fmt.Errorf("read config file %q: %w", configPath, err)
+			return Config{}, "", fmt.Errorf("read config file %q: %w", configPath, err)
 		}
 	}
 
 	l.envMap = make(map[string]string)
 	l.generateEnvMap(reflect.TypeFor[Config](), "", "")
 	if err := k.Load(staticProvider{values: l.environmentValues()}, nil); err != nil {
-		return Config{}, fmt.Errorf("load environment configuration: %w", err)
+		return Config{}, "", fmt.Errorf("load environment configuration: %w", err)
 	}
 	if err := k.Load(&flagProvider{flags: flags, flagMap: l.flagMap, onlyChanged: true}, nil); err != nil {
-		return Config{}, fmt.Errorf("load command-line configuration: %w", err)
+		return Config{}, "", fmt.Errorf("load command-line configuration: %w", err)
 	}
 
 	var cfg Config
@@ -117,15 +117,15 @@ func (l *Loader) Load(flags *pflag.FlagSet) (Config, error) {
 		},
 	}
 	if err := k.UnmarshalWithConf("", &cfg, unmarshal); err != nil {
-		return Config{}, fmt.Errorf("%w: decode configuration: %v", ErrInvalid, err)
+		return Config{}, "", fmt.Errorf("%w: decode configuration: %v", ErrInvalid, err)
 	}
 	if cfg.Encryption.Keys == nil {
 		cfg.Encryption.Keys = map[int32]string{}
 	}
 	if err := cfg.Validate(); err != nil {
-		return Config{}, err
+		return Config{}, "", err
 	}
-	return cfg, nil
+	return cfg, configPath, nil
 }
 
 // Load is retained for library callers that only need defaults, auto-discovered
@@ -135,7 +135,21 @@ func Load() (Config, error) {
 	loader := NewLoader()
 	flags := pflag.NewFlagSet("teldrive", pflag.ContinueOnError)
 	loader.RegisterFlags(flags)
-	return loader.Load(flags)
+	cfg, _, err := loader.Load(flags)
+	return cfg, err
+}
+
+// LoadFromPath reads a single known config file.  Used by callers that
+// already know the exact path (e.g. systemd services with --config).
+func LoadFromPath(configPath string) (Config, error) {
+	loader := NewLoader()
+	flags := pflag.NewFlagSet("teldrive", pflag.ContinueOnError)
+	loader.RegisterFlags(flags)
+	if configPath != "" {
+		_ = flags.Set("config", configPath)
+	}
+	cfg, _, err := loader.Load(flags)
+	return cfg, err
 }
 
 func LoadFrom(lookup func(string) (string, bool)) (Config, error) {
@@ -145,7 +159,8 @@ func LoadFrom(lookup func(string) (string, bool)) (Config, error) {
 	loader := newLoader(lookup, func() (string, error) { return "", nil })
 	flags := pflag.NewFlagSet("teldrive", pflag.ContinueOnError)
 	loader.RegisterFlags(flags)
-	return loader.Load(flags)
+	cfg, _, err := loader.Load(flags)
+	return cfg, err
 }
 
 func (l *Loader) resolveConfigPath(flags *pflag.FlagSet) (string, error) {
@@ -156,9 +171,9 @@ func (l *Loader) resolveConfigPath(flags *pflag.FlagSet) (string, error) {
 		}
 		return path, nil
 	}
-	home, err := l.homeDir()
-	if err != nil {
-		return "", fmt.Errorf("resolve home directory: %w", err)
+	var home string
+	if h, err := l.homeDir(); err == nil && h != "" {
+		home = h
 	}
 	candidates := []string{}
 	if home != "" {

@@ -2,6 +2,7 @@ import { Button, Modal, Separator, Typography } from "@heroui/react";
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, Outlet, useLocation } from "@tanstack/react-router";
 import { useState } from "react";
+import CloudIcon from "~icons/material-symbols/cloud";
 import KeyIcon from "~icons/gravity-ui/key";
 import MenuIcon from "~icons/gravity-ui/bars";
 import PaletteIcon from "~icons/gravity-ui/palette";
@@ -56,6 +57,12 @@ const SETTINGS_GROUPS = [
         key: "jobs",
         path: "/settings/periodic-jobs",
         icon: ClockIcon,
+        capability: "system.maintenance",
+      },
+      {
+        key: "cloudflare",
+        path: "/settings/cloudflare",
+        icon: CloudIcon,
         capability: "system.maintenance",
       },
     ],

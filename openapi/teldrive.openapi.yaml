@@ -21,6 +21,7 @@ tags:
   - name: Events
   - name: Files
   - name: Folders
+  - name: Settings
   - name: Uploads
   - name: Shares
   - name: Public shares
@@ -2856,6 +2857,162 @@ paths:
         - BearerAuth: []
         - CookieAuth: []
         - ExternalApiKeyAuth: []
+  /v1/settings/probe:
+    get:
+      operationId: getSettingsProbe
+      description: Probe stored configuration without leaking secrets.
+      parameters: []
+      responses:
+        "200":
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SettingsProbe"
+      tags:
+        - Settings
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+        - ExternalApiKeyAuth: []
+  /v1/settings/worker-deploy:
+    post:
+      operationId: deployWorker
+      description: |-
+        One-click Cloudflare Worker deployment.  The server validates the
+        supplied API token, uploads the bundled Worker script with all
+        required secrets (enabled bot tokens + gateway HMAC secret), binds
+        it to the first DNS zone found on the account as
+        `teldrive-gateway.{zone}`, then atomically updates the gateway URL.
+
+        Any failure along the way — bad token, missing zone, failed script
+        upload, missing bot tokens — aborts without modifying the current
+        server configuration.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyHeader"
+      responses:
+        "200":
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkerDeployResponse"
+        "400":
+          description: The server could not understand the request due to invalid syntax.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "401":
+          description: Access is unauthorized.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "403":
+          description: Access is forbidden.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: The server cannot find the requested resource.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: The request conflicts with the current state of the server.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "422":
+          description: Client error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+      tags:
+        - Settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkerDeployRequest"
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+        - ExternalApiKeyAuth: []
+  /v1/settings/gateway:
+    get:
+      operationId: getGatewaySettings
+      description: Read the gateway data-plane settings (download-split threshold).
+      parameters: []
+      responses:
+        "200":
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewaySettings"
+      tags:
+        - Settings
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+        - ExternalApiKeyAuth: []
+    put:
+      operationId: updateGatewaySettings
+      description: |-
+        Hot-update the gateway download-split threshold.  Persists
+        `worker-min-bytes` to config.toml and applies it to the running
+        gateway service immediately, without a restart.
+      parameters: []
+      responses:
+        "200":
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewaySettings"
+        "400":
+          description: The server could not understand the request due to invalid syntax.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "401":
+          description: Access is unauthorized.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "422":
+          description: Client error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+      tags:
+        - Settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GatewaySettingsUpdate"
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+        - ExternalApiKeyAuth: []
   /v1/uploads:
     get:
       operationId: listUploads
@@ -3384,6 +3541,93 @@ paths:
                 $ref: "#/components/schemas/ErrorEnvelope"
       tags:
         - Uploads
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+        - ExternalApiKeyAuth: []
+  /v1/uploads/{uploadId}/parts/{partNo}/gateway:
+    post:
+      operationId: prepareUploadPartGateway
+      description: >-
+        Request a short-lived data-plane upload ticket for one part.
+
+        When the gateway is enabled and the session is eligible (not encrypted,
+        no expected
+
+        hash, 16 MiB part size), the response carries an uploadUrl pointing at
+        the gateway
+
+        worker and the client PUTs the bytes there directly; a `stored` response
+        means the
+
+        part is already present and must be skipped. 501 signals the client to
+        fall back
+
+        to the legacy PUT. Byte streams never traverse this server.
+      parameters:
+        - name: uploadId
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/Uuid"
+        - name: partNo
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+      responses:
+        "200":
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadPartGatewayResponse"
+        "400":
+          description: The server could not understand the request due to invalid syntax.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "401":
+          description: Access is unauthorized.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: The server cannot find the requested resource.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: The request conflicts with the current state of the server.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "410":
+          description: Client error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "501":
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+      tags:
+        - Uploads
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UploadPartGatewayRequest"
       security:
         - BearerAuth: []
         - CookieAuth: []
@@ -7053,6 +7297,100 @@ components:
         modTime:
           type: string
           format: date-time
+    SettingsProbe:
+      type: object
+      required:
+        - cloudflareApiTokenConfigured
+        - gatewayEnabled
+      properties:
+        cloudflareApiTokenConfigured:
+          type: boolean
+          description: True once a Cloudflare API token has been saved (encrypted).
+        gatewayEnabled:
+          type: boolean
+          description: True when the gateway is currently pointed at a Worker URL.
+      description: Write-only settings probe — never returns secrets.
+    WorkerDeployResponse:
+      type: object
+      required:
+        - workerUrl
+        - zoneName
+        - accountId
+      properties:
+        workerUrl:
+          type: string
+          description: Fully-qualified Worker base URL (e.g.
+            https://teldrive-gateway.example.com).
+        zoneName:
+          type: string
+          description: DNS zone name that hosts the Worker (e.g. example.com).
+        accountId:
+          type: string
+          description: Cloudflare account ID that owns the Worker.
+      description: Successful worker deployment response.
+    WorkerDeployRequest:
+      type: object
+      required:
+        - cloudflareApiToken
+      properties:
+        cloudflareApiToken:
+          type: string
+          description: |-
+            Cloudflare API token with Workers Scripts:Edit, Workers Routes:Edit,
+            Zone:Read, DNS:Edit, and Account:Read permissions.  Sent once and
+            encrypted server-side; subsequent reads return no value.
+        targetZone:
+          type: string
+          description: >-
+            Optional DNS zone to create a `teldrive.` subdomain on (e.g.
+            `example.com`).
+
+            When provided the token must also have DNS:Edit permission; the
+            backend will
+
+            create an A record `teldrive.{zone}` pointing at the VPS public IP
+            and bind
+
+            the Worker to that hostname.  Leave empty to skip DNS creation and
+            bind the
+
+            Worker to the existing `teldrive-gateway.{zone}` hostname on the
+            first zone.
+      description: Request body for one-click Cloudflare Worker deployment.
+    GatewaySettings:
+      type: object
+      required:
+        - gatewayEnabled
+        - workerMinBytes
+      properties:
+        gatewayEnabled:
+          type: boolean
+          description: True when the gateway data plane (Cloudflare Worker) is configured.
+        workerMinBytes:
+          type: integer
+          format: int64
+          description: >-
+            Downloads smaller than this many bytes stay on the origin server
+            instead
+
+            of being redirected to the Cloudflare Worker: small files
+            (thumbnails,
+
+            images) suffer the Worker's extra edge hop.  `0` routes every
+
+            gateway-eligible file through the Worker.
+      description: Gateway data-plane settings surfaced in the settings UI.
+    GatewaySettingsUpdate:
+      type: object
+      required:
+        - workerMinBytes
+      properties:
+        workerMinBytes:
+          type: integer
+          format: int64
+          minimum: 0
+          description: New download-split threshold in bytes.  Must be zero or positive.
+      description: Mutable gateway settings.
     UploadState:
       type: string
       enum:
@@ -7370,6 +7708,29 @@ components:
         updatedAt:
           type: string
           format: date-time
+    UploadPartGatewayResponse:
+      type: object
+      properties:
+        uploadUrl:
+          type: string
+          format: uri
+          description: Data-plane URL the client PUTs the part bytes to. Absent when
+            `stored` is true.
+        stored:
+          type: boolean
+          description: True when the part is already stored; the client must skip the
+            upload.
+    UploadPartGatewayRequest:
+      type: object
+      required:
+        - size
+      properties:
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Plaintext size of the part in bytes. Must equal the session part
+            size (or the remainder of the final part).
     SharePermission:
       type: string
       enum:

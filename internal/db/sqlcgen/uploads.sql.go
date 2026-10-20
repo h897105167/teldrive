@@ -87,7 +87,7 @@ WHERE /* TEMPLATE: schema */upload_parts.state <> 'stored'
     /* TEMPLATE: schema */upload_parts.lease_expires_at IS NULL
     OR /* TEMPLATE: schema */upload_parts.lease_expires_at < now()
   )
-RETURNING upload_id, part_no, channel_id, message_id, plain_size, stored_size, checksum, salt, state, lease_token, lease_expires_at, last_error_code, created_at, updated_at, block_hashes
+RETURNING upload_id, part_no, channel_id, message_id, plain_size, stored_size, checksum, salt, state, lease_token, lease_expires_at, last_error_code, created_at, updated_at, block_hashes, storage_kind, bot_id, telegram_file_id
 `
 
 type ClaimUploadPartParams struct {
@@ -127,6 +127,102 @@ func (q *Queries) ClaimUploadPart(ctx context.Context, arg ClaimUploadPartParams
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.BlockHashes,
+		&i.StorageKind,
+		&i.BotID,
+		&i.TelegramFileID,
+	)
+	return &i, err
+}
+
+const claimUploadPartBot = `-- name: ClaimUploadPartBot :one
+INSERT INTO /* TEMPLATE: schema */upload_parts (
+    upload_id,
+    part_no,
+    channel_id,
+    plain_size,
+    storage_kind,
+    bot_id,
+    state,
+    lease_token,
+    lease_expires_at
+) VALUES (
+    $1,
+    $2,
+    $3,
+    $4,
+    'bot',
+    $5,
+    'uploading',
+    $6,
+    $7
+)
+ON CONFLICT (upload_id, part_no) DO UPDATE
+SET channel_id = EXCLUDED.channel_id,
+    plain_size = EXCLUDED.plain_size,
+    storage_kind = EXCLUDED.storage_kind,
+    bot_id = EXCLUDED.bot_id,
+    telegram_file_id = NULL,
+    message_id = NULL,
+    stored_size = NULL,
+    checksum = NULL,
+    salt = NULL,
+    block_hashes = NULL,
+    state = 'uploading',
+    lease_token = EXCLUDED.lease_token,
+    lease_expires_at = EXCLUDED.lease_expires_at,
+    last_error_code = NULL,
+    updated_at = now()
+WHERE /* TEMPLATE: schema */upload_parts.state <> 'stored'
+  AND (
+    /* TEMPLATE: schema */upload_parts.lease_expires_at IS NULL
+    OR /* TEMPLATE: schema */upload_parts.lease_expires_at < now()
+  )
+RETURNING upload_id, part_no, channel_id, message_id, plain_size, stored_size, checksum, salt, state, lease_token, lease_expires_at, last_error_code, created_at, updated_at, block_hashes, storage_kind, bot_id, telegram_file_id
+`
+
+type ClaimUploadPartBotParams struct {
+	UploadID       pgtype.UUID        `json:"upload_id"`
+	PartNo         int32              `json:"part_no"`
+	ChannelID      int64              `json:"channel_id"`
+	PlainSize      int64              `json:"plain_size"`
+	BotID          pgtype.Int8        `json:"bot_id"`
+	LeaseToken     pgtype.UUID        `json:"lease_token"`
+	LeaseExpiresAt pgtype.Timestamptz `json:"lease_expires_at"`
+}
+
+// 网关上传（P2）：分块字节经 Cloudflare Worker 直送 Telegram Bot API，服务端只记录元数据。
+// 与 ClaimUploadPart 的互斥语义一致：stored 或租约未过期的行不允许重 claim。
+// bot part 无服务端校验和（checksum/salt/block_hashes 恒为 NULL）。
+func (q *Queries) ClaimUploadPartBot(ctx context.Context, arg ClaimUploadPartBotParams) (*UploadPart, error) {
+	row := q.db.QueryRow(ctx, claimUploadPartBot,
+		arg.UploadID,
+		arg.PartNo,
+		arg.ChannelID,
+		arg.PlainSize,
+		arg.BotID,
+		arg.LeaseToken,
+		arg.LeaseExpiresAt,
+	)
+	var i UploadPart
+	err := row.Scan(
+		&i.UploadID,
+		&i.PartNo,
+		&i.ChannelID,
+		&i.MessageID,
+		&i.PlainSize,
+		&i.StoredSize,
+		&i.Checksum,
+		&i.Salt,
+		&i.State,
+		&i.LeaseToken,
+		&i.LeaseExpiresAt,
+		&i.LastErrorCode,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.BlockHashes,
+		&i.StorageKind,
+		&i.BotID,
+		&i.TelegramFileID,
 	)
 	return &i, err
 }
@@ -566,7 +662,7 @@ func (q *Queries) GetStoredUploadPartSummary(ctx context.Context, uploadID pgtyp
 }
 
 const getUploadPart = `-- name: GetUploadPart :one
-SELECT upload_id, part_no, channel_id, message_id, plain_size, stored_size, checksum, salt, state, lease_token, lease_expires_at, last_error_code, created_at, updated_at, block_hashes
+SELECT upload_id, part_no, channel_id, message_id, plain_size, stored_size, checksum, salt, state, lease_token, lease_expires_at, last_error_code, created_at, updated_at, block_hashes, storage_kind, bot_id, telegram_file_id
 FROM /* TEMPLATE: schema */upload_parts
 WHERE upload_id = $1
   AND part_no = $2
@@ -596,6 +692,9 @@ func (q *Queries) GetUploadPart(ctx context.Context, arg GetUploadPartParams) (*
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.BlockHashes,
+		&i.StorageKind,
+		&i.BotID,
+		&i.TelegramFileID,
 	)
 	return &i, err
 }
@@ -758,7 +857,10 @@ INSERT INTO /* TEMPLATE: schema */file_parts (
     stored_size,
     checksum,
     salt,
-    block_hashes
+    block_hashes,
+    storage_kind,
+    bot_id,
+    telegram_file_id
 )
 SELECT
     $1,
@@ -769,7 +871,10 @@ SELECT
     stored_size,
     checksum,
     salt,
-    block_hashes
+    block_hashes,
+    storage_kind,
+    bot_id,
+    telegram_file_id
 FROM /* TEMPLATE: schema */upload_parts
 WHERE upload_id = $2
   AND state = 'stored'
@@ -873,7 +978,7 @@ func (q *Queries) ListUploadDailyStatistics(ctx context.Context, arg ListUploadD
 }
 
 const listUploadParts = `-- name: ListUploadParts :many
-SELECT upload_id, part_no, channel_id, message_id, plain_size, stored_size, checksum, salt, state, lease_token, lease_expires_at, last_error_code, created_at, updated_at, block_hashes
+SELECT upload_id, part_no, channel_id, message_id, plain_size, stored_size, checksum, salt, state, lease_token, lease_expires_at, last_error_code, created_at, updated_at, block_hashes, storage_kind, bot_id, telegram_file_id
 FROM /* TEMPLATE: schema */upload_parts
 WHERE upload_id = $1
   AND (
@@ -915,6 +1020,9 @@ func (q *Queries) ListUploadParts(ctx context.Context, arg ListUploadPartsParams
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.BlockHashes,
+			&i.StorageKind,
+			&i.BotID,
+			&i.TelegramFileID,
 		); err != nil {
 			return nil, err
 		}
@@ -927,7 +1035,7 @@ func (q *Queries) ListUploadParts(ctx context.Context, arg ListUploadPartsParams
 }
 
 const listUploadPartsByUploadIDs = `-- name: ListUploadPartsByUploadIDs :many
-SELECT upload_id, part_no, channel_id, message_id, plain_size, stored_size, checksum, salt, state, lease_token, lease_expires_at, last_error_code, created_at, updated_at, block_hashes
+SELECT upload_id, part_no, channel_id, message_id, plain_size, stored_size, checksum, salt, state, lease_token, lease_expires_at, last_error_code, created_at, updated_at, block_hashes, storage_kind, bot_id, telegram_file_id
 FROM /* TEMPLATE: schema */upload_parts
 WHERE upload_id = ANY($1::uuid[])
 ORDER BY upload_id, part_no
@@ -958,6 +1066,9 @@ func (q *Queries) ListUploadPartsByUploadIDs(ctx context.Context, uploadIds []pg
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.BlockHashes,
+			&i.StorageKind,
+			&i.BotID,
+			&i.TelegramFileID,
 		); err != nil {
 			return nil, err
 		}
@@ -970,7 +1081,7 @@ func (q *Queries) ListUploadPartsByUploadIDs(ctx context.Context, uploadIds []pg
 }
 
 const listUploadPartsForCleanupMany = `-- name: ListUploadPartsForCleanupMany :many
-SELECT up.upload_id, up.part_no, up.channel_id, up.message_id, up.plain_size, up.stored_size, up.checksum, up.salt, up.state, up.lease_token, up.lease_expires_at, up.last_error_code, up.created_at, up.updated_at, up.block_hashes
+SELECT up.upload_id, up.part_no, up.channel_id, up.message_id, up.plain_size, up.stored_size, up.checksum, up.salt, up.state, up.lease_token, up.lease_expires_at, up.last_error_code, up.created_at, up.updated_at, up.block_hashes, up.storage_kind, up.bot_id, up.telegram_file_id
 FROM /* TEMPLATE: schema */upload_parts AS up
 JOIN /* TEMPLATE: schema */upload_sessions AS us ON us.id = up.upload_id
 WHERE us.id = ANY($1::uuid[])
@@ -1004,6 +1115,9 @@ func (q *Queries) ListUploadPartsForCleanupMany(ctx context.Context, uploadIds [
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.BlockHashes,
+			&i.StorageKind,
+			&i.BotID,
+			&i.TelegramFileID,
 		); err != nil {
 			return nil, err
 		}
@@ -1292,7 +1406,7 @@ SET state = 'failed',
 WHERE upload_id = $2
   AND part_no = $3
   AND lease_token = $4
-RETURNING upload_id, part_no, channel_id, message_id, plain_size, stored_size, checksum, salt, state, lease_token, lease_expires_at, last_error_code, created_at, updated_at, block_hashes
+RETURNING upload_id, part_no, channel_id, message_id, plain_size, stored_size, checksum, salt, state, lease_token, lease_expires_at, last_error_code, created_at, updated_at, block_hashes, storage_kind, bot_id, telegram_file_id
 `
 
 type MarkUploadPartFailedParams struct {
@@ -1326,6 +1440,9 @@ func (q *Queries) MarkUploadPartFailed(ctx context.Context, arg MarkUploadPartFa
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.BlockHashes,
+		&i.StorageKind,
+		&i.BotID,
+		&i.TelegramFileID,
 	)
 	return &i, err
 }
@@ -1346,7 +1463,7 @@ WHERE upload_id = $6
   AND part_no = $7
   AND state = 'uploading'
   AND lease_token = $8
-RETURNING upload_id, part_no, channel_id, message_id, plain_size, stored_size, checksum, salt, state, lease_token, lease_expires_at, last_error_code, created_at, updated_at, block_hashes
+RETURNING upload_id, part_no, channel_id, message_id, plain_size, stored_size, checksum, salt, state, lease_token, lease_expires_at, last_error_code, created_at, updated_at, block_hashes, storage_kind, bot_id, telegram_file_id
 `
 
 type MarkUploadPartStoredParams struct {
@@ -1388,6 +1505,70 @@ func (q *Queries) MarkUploadPartStored(ctx context.Context, arg MarkUploadPartSt
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.BlockHashes,
+		&i.StorageKind,
+		&i.BotID,
+		&i.TelegramFileID,
+	)
+	return &i, err
+}
+
+const markUploadPartStoredBot = `-- name: MarkUploadPartStoredBot :one
+UPDATE /* TEMPLATE: schema */upload_parts
+SET message_id = $1,
+    stored_size = $2,
+    telegram_file_id = $3,
+    state = 'stored',
+    lease_token = NULL,
+    lease_expires_at = NULL,
+    last_error_code = NULL,
+    updated_at = now()
+WHERE upload_id = $4
+  AND part_no = $5
+  AND state = 'uploading'
+  AND lease_token = $6
+  AND storage_kind = 'bot'
+RETURNING upload_id, part_no, channel_id, message_id, plain_size, stored_size, checksum, salt, state, lease_token, lease_expires_at, last_error_code, created_at, updated_at, block_hashes, storage_kind, bot_id, telegram_file_id
+`
+
+type MarkUploadPartStoredBotParams struct {
+	MessageID      pgtype.Int8 `json:"message_id"`
+	StoredSize     pgtype.Int8 `json:"stored_size"`
+	TelegramFileID pgtype.Text `json:"telegram_file_id"`
+	UploadID       pgtype.UUID `json:"upload_id"`
+	PartNo         int32       `json:"part_no"`
+	LeaseToken     pgtype.UUID `json:"lease_token"`
+}
+
+// Worker 回调落库：仅在租约仍持有且确为 bot part 时生效，telegram_file_id 绝不暴露给客户端。
+func (q *Queries) MarkUploadPartStoredBot(ctx context.Context, arg MarkUploadPartStoredBotParams) (*UploadPart, error) {
+	row := q.db.QueryRow(ctx, markUploadPartStoredBot,
+		arg.MessageID,
+		arg.StoredSize,
+		arg.TelegramFileID,
+		arg.UploadID,
+		arg.PartNo,
+		arg.LeaseToken,
+	)
+	var i UploadPart
+	err := row.Scan(
+		&i.UploadID,
+		&i.PartNo,
+		&i.ChannelID,
+		&i.MessageID,
+		&i.PlainSize,
+		&i.StoredSize,
+		&i.Checksum,
+		&i.Salt,
+		&i.State,
+		&i.LeaseToken,
+		&i.LeaseExpiresAt,
+		&i.LastErrorCode,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.BlockHashes,
+		&i.StorageKind,
+		&i.BotID,
+		&i.TelegramFileID,
 	)
 	return &i, err
 }

@@ -1,0 +1,20 @@
+name = "teldrive-gateway"
+main = "src/index.ts"
+compatibility_date = "2025-08-01"
+workers_dev = true
+
+# BOT_TOKEN_1 / BOT_TOKEN_2 / GATEWAY_SECRET 不放在这里，使用 secret：
+#   wrangler secret put BOT_TOKEN_1
+#   wrangler secret put BOT_TOKEN_2
+#   wrangler secret put GATEWAY_SECRET
+
+[vars]
+# 存储频道 ID
+CHANNEL_ID = "-1003732028072"
+
+# teldrive 服务端的 manifest 内部端点（VPS 公网 HTTPS 地址）。
+MANIFEST_URL = "https://teldrive.h897105167.dpdns.org/internal/gateway/manifest"
+
+# 上传完成回调端点（P2）。缺省时 Worker 会从 MANIFEST_URL 推导同源地址，
+# 这里显式写出以便与 MANIFEST_URL 解耦演进。
+UPLOAD_COMPLETE_URL = "https://teldrive.h897105167.dpdns.org/internal/gateway/upload-complete"

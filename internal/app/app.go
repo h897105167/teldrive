@@ -30,6 +30,7 @@ import (
 	"github.com/tgdrive/teldrive/v2/internal/db/sqlcgen"
 	userevents "github.com/tgdrive/teldrive/v2/internal/events"
 	"github.com/tgdrive/teldrive/v2/internal/fileops"
+	"github.com/tgdrive/teldrive/v2/internal/gateway"
 	"github.com/tgdrive/teldrive/v2/internal/health"
 	"github.com/tgdrive/teldrive/v2/internal/jobs"
 	"github.com/tgdrive/teldrive/v2/internal/legacymigrate"
@@ -50,6 +51,9 @@ type Dependencies struct {
 	Authenticator api.Authenticator
 	Logger        *slog.Logger
 	Version       string
+	// ConfigPath is the filesystem path of the active config.toml; used by
+	// the Cloudflare one-click deploy to atomically rewrite settings.
+	ConfigPath string
 }
 
 type App struct {
@@ -205,11 +209,19 @@ func New(ctx context.Context, cfg config.Config, dependencies Dependencies) (*Ap
 	if err != nil {
 		return nil, fmt.Errorf("create job runtime: %w", err)
 	}
+	gatewayService := gateway.New(gateway.NewPoolStore(pool), gateway.Config{
+		Enabled: cfg.Gateway.Enabled, PublicURL: cfg.Gateway.PublicURL, Secret: cfg.Gateway.Secret,
+		TicketTTL: cfg.Gateway.TicketTTL, BotSlots: cfg.Gateway.BotSlots,
+		WorkerMinBytes: cfg.Gateway.WorkerMinBytes,
+	})
 	handler := api.NewHandler(
 		catalogService, uploadService, uploadPipeline, downloader, healthService,
 		cfg.Encryption.ActiveKeyVersion, eventService,
 	).ConfigureDomains(authService, botService, channelService, fileService, shareService, telegramAccount).
-		ConfigureJobs(jobRuntime)
+		ConfigureJobs(jobRuntime).
+		ConfigureGateway(gatewayService).
+		ConfigurePool(pool).
+		ConfigureCloudflare(secureCipher, dependencies.ConfigPath, &cfg)
 	httpServer, err := api.NewServer(handler, api.NewSecurity(authenticator, eventService).WithPublicFileContent(cfg.Security.PublicFileContent))
 	if err != nil {
 		return nil, fmt.Errorf("create generated HTTP server: %w", err)
@@ -225,7 +237,15 @@ func New(ctx context.Context, cfg config.Config, dependencies Dependencies) (*Ap
 		return nil, fmt.Errorf("configure trusted proxies: %w", err)
 	}
 	mux.Use(httpRequestLogger(dependencies.Logger, requestSecurity))
-	routeApplication(mux, requestSecurity.middleware(browserCSRFMiddleware(sessionRenewalMiddleware(authService, httpServer))), webUI)
+	// The gateway internal endpoints self-authenticate with a signed ticket, and stay
+	// unregistered (plain 404) while the gateway is disabled.
+	var gatewayManifest http.Handler
+	var gatewayUploadComplete http.Handler
+	if gatewayService.Enabled() {
+		gatewayManifest = gatewayService.ManifestHandler()
+		gatewayUploadComplete = gatewayService.UploadCompleteHandler(uploadService)
+	}
+	routeApplication(mux, requestSecurity.middleware(browserCSRFMiddleware(sessionRenewalMiddleware(authService, httpServer))), webUI, gatewayManifest, gatewayUploadComplete)
 
 	application := &App{
 		config:            cfg,

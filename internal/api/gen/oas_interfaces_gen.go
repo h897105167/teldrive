@@ -129,6 +129,10 @@ type DeletePeriodicJobRes interface {
 	deletePeriodicJobRes()
 }
 
+type DeployWorkerRes interface {
+	deployWorkerRes()
+}
+
 type DiscoverChannelsRes interface {
 	discoverChannelsRes()
 }
@@ -325,6 +329,10 @@ type PausePeriodicJobRes interface {
 	pausePeriodicJobRes()
 }
 
+type PrepareUploadPartGatewayRes interface {
+	prepareUploadPartGatewayRes()
+}
+
 type ProvisionBotRes interface {
 	provisionBotRes()
 }
@@ -459,6 +467,10 @@ type UpdateFileAccessGrantRes interface {
 
 type UpdateFileRes interface {
 	updateFileRes()
+}
+
+type UpdateGatewaySettingsRes interface {
+	updateGatewaySettingsRes()
 }
 
 type UpdatePeriodicJobRes interface {

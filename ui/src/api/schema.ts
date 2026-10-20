@@ -884,6 +884,72 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/settings/probe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Probe stored configuration without leaking secrets. */
+        get: operations["getSettingsProbe"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/settings/worker-deploy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description One-click Cloudflare Worker deployment.  The server validates the
+         *     supplied API token, uploads the bundled Worker script with all
+         *     required secrets (enabled bot tokens + gateway HMAC secret), binds
+         *     it to the first DNS zone found on the account as
+         *     `teldrive-gateway.{zone}`, then atomically updates the gateway URL.
+         *
+         *     Any failure along the way — bad token, missing zone, failed script
+         *     upload, missing bot tokens — aborts without modifying the current
+         *     server configuration.
+         */
+        post: operations["deployWorker"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/settings/gateway": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Read the gateway data-plane settings (download-split threshold). */
+        get: operations["getGatewaySettings"];
+        /**
+         * @description Hot-update the gateway download-split threshold.  Persists
+         *     `worker-min-bytes` to config.toml and applies it to the running
+         *     gateway service immediately, without a restart.
+         */
+        put: operations["updateGatewaySettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/uploads": {
         parameters: {
             query?: never;
@@ -1005,6 +1071,30 @@ export interface paths {
          *     guarantees immediate read-after-write visibility.
          */
         post: operations["completeUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/uploads/{uploadId}/parts/{partNo}/gateway": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * @description Request a short-lived data-plane upload ticket for one part.
+         *     When the gateway is enabled and the session is eligible (not encrypted, no expected
+         *     hash, 16 MiB part size), the response carries an uploadUrl pointing at the gateway
+         *     worker and the client PUTs the bytes there directly; a `stored` response means the
+         *     part is already present and must be skipped. 501 signals the client to fall back
+         *     to the legacy PUT. Byte streams never traverse this server.
+         */
+        post: operations["prepareUploadPartGateway"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1987,6 +2077,60 @@ export interface components {
             /** Format: date-time */
             modTime?: string;
         };
+        /** @description Write-only settings probe — never returns secrets. */
+        SettingsProbe: {
+            /** @description True once a Cloudflare API token has been saved (encrypted). */
+            cloudflareApiTokenConfigured: boolean;
+            /** @description True when the gateway is currently pointed at a Worker URL. */
+            gatewayEnabled: boolean;
+        };
+        /** @description Successful worker deployment response. */
+        WorkerDeployResponse: {
+            /** @description Fully-qualified Worker base URL (e.g. https://teldrive-gateway.example.com). */
+            workerUrl: string;
+            /** @description DNS zone name that hosts the Worker (e.g. example.com). */
+            zoneName: string;
+            /** @description Cloudflare account ID that owns the Worker. */
+            accountId: string;
+        };
+        /** @description Request body for one-click Cloudflare Worker deployment. */
+        WorkerDeployRequest: {
+            /**
+             * @description Cloudflare API token with Workers Scripts:Edit, Workers Routes:Edit,
+             *     Zone:Read, DNS:Edit, and Account:Read permissions.  Sent once and
+             *     encrypted server-side; subsequent reads return no value.
+             */
+            cloudflareApiToken: string;
+            /**
+             * @description Optional DNS zone to create a `teldrive.` subdomain on (e.g. `example.com`).
+             *     When provided the token must also have DNS:Edit permission; the backend will
+             *     create an A record `teldrive.{zone}` pointing at the VPS public IP and bind
+             *     the Worker to that hostname.  Leave empty to skip DNS creation and bind the
+             *     Worker to the existing `teldrive-gateway.{zone}` hostname on the first zone.
+             */
+            targetZone?: string;
+        };
+        /** @description Gateway data-plane settings surfaced in the settings UI. */
+        GatewaySettings: {
+            /** @description True when the gateway data plane (Cloudflare Worker) is configured. */
+            gatewayEnabled: boolean;
+            /**
+             * Format: int64
+             * @description Downloads smaller than this many bytes stay on the origin server instead
+             *     of being redirected to the Cloudflare Worker: small files (thumbnails,
+             *     images) suffer the Worker's extra edge hop.  `0` routes every
+             *     gateway-eligible file through the Worker.
+             */
+            workerMinBytes: number;
+        };
+        /** @description Mutable gateway settings. */
+        GatewaySettingsUpdate: {
+            /**
+             * Format: int64
+             * @description New download-split threshold in bytes.  Must be zero or positive.
+             */
+            workerMinBytes: number;
+        };
         /** @enum {string} */
         UploadState: "open" | "completing" | "completed" | "aborted" | "expired";
         UploadSession: {
@@ -2137,6 +2281,22 @@ export interface components {
             createdAt: string;
             /** Format: date-time */
             updatedAt: string;
+        };
+        UploadPartGatewayResponse: {
+            /**
+             * Format: uri
+             * @description Data-plane URL the client PUTs the part bytes to. Absent when `stored` is true.
+             */
+            uploadUrl?: string;
+            /** @description True when the part is already stored; the client must skip the upload. */
+            stored?: boolean;
+        };
+        UploadPartGatewayRequest: {
+            /**
+             * Format: int64
+             * @description Plaintext size of the part in bytes. Must equal the session part size (or the remainder of the final part).
+             */
+            size: number;
         };
         /** @enum {string} */
         SharePermission: "read" | "edit";
@@ -5693,6 +5853,187 @@ export interface operations {
             };
         };
     };
+    getSettingsProbe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The request has succeeded. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsProbe"];
+                };
+            };
+        };
+    };
+    deployWorker: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Stable UUID generated by the caller for safe request retries. */
+                "Idempotency-Key": components["parameters"]["IdempotencyHeader"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerDeployRequest"];
+            };
+        };
+        responses: {
+            /** @description The request has succeeded. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerDeployResponse"];
+                };
+            };
+            /** @description The server could not understand the request due to invalid syntax. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Access is unauthorized. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Access is forbidden. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The server cannot find the requested resource. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The request conflicts with the current state of the server. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Client error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getGatewaySettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The request has succeeded. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GatewaySettings"];
+                };
+            };
+        };
+    };
+    updateGatewaySettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GatewaySettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description The request has succeeded. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GatewaySettings"];
+                };
+            };
+            /** @description The server could not understand the request due to invalid syntax. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Access is unauthorized. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Client error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     listUploads: {
         parameters: {
             query?: {
@@ -6272,6 +6613,87 @@ export interface operations {
             };
             /** @description Client error */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    prepareUploadPartGateway: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                uploadId: components["schemas"]["Uuid"];
+                partNo: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UploadPartGatewayRequest"];
+            };
+        };
+        responses: {
+            /** @description The request has succeeded. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadPartGatewayResponse"];
+                };
+            };
+            /** @description The server could not understand the request due to invalid syntax. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Access is unauthorized. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The server cannot find the requested resource. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The request conflicts with the current state of the server. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Client error */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Server error */
+            501: {
                 headers: {
                     [name: string]: unknown;
                 };
