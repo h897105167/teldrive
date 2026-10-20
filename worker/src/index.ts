@@ -25,7 +25,19 @@
 // 误杀的代价很小：客户端按 Range 续传即可（206/后缀区间/跨 part 均已验证）。
 const PART_STREAM_TIMEOUT_MS = 300_000;
 
+// 预取深度：只提前一个 part。每个 part 都要向 api.telegram.org 新建一次连接并等响应头，
+// 实测这段固定要 ~0.55 s；串行时它整段压在每一个 part 的边界上（实测 16 part 的文件
+// 在每处边界都停约 0.55 s，累计多花 ~9 s），而这段等待完全可以藏在上一块的传输时间里。
+// 深度 1 就够：单块传输本来就远长于握手。不加深：更深的预取只会让运行时缓冲更多
+// 尚未被客户端消费的字节，收益为零，内存与失败面反而变大。
+const PREFETCH_DEPTH = 1;
+
+// 单个 part 从"发起 fetch"到"拿到响应头"的上限。必须与下面的传输看门狗分开：
+// 预取时响应头会在客户端还没开始读这一块时就到，body 尚未流动，不能用传输超时去衡量。
+const PART_HEADER_TIMEOUT_MS = 90_000;
+
 import { HttpError } from "./errors";
+import { SubrequestBudget, SUBREQUEST_LIMIT } from "./budget";
 import { loadManifest, type Manifest, type ManifestPart } from "./manifest";
 import { fetchTelegramRange, type Env } from "./telegram";
 import { verifyTicket } from "./ticket";
@@ -36,6 +48,31 @@ interface RangeSelection {
   end: number;
   length: number;
   partial: boolean;
+}
+
+// 一个已发起但可能尚未被消费的 part 上游。abort 同时约束"等响应头"和"传输字节"。
+interface PartStream {
+  response: Promise<Response>;
+  abort: AbortController;
+  headerTimer: ReturnType<typeof setTimeout>;
+}
+
+function startPartFetch(
+  env: Env,
+  part: ManifestPart,
+  low: number,
+  high: number,
+  budget: SubrequestBudget,
+): PartStream {
+  const abort = new AbortController();
+  // 响应头预算与传输预算分开：预取时这块的响应头会在客户端还没读它时就到，
+  // 若沿用 300 s 的传输超时会把它误杀；反之握手也可能卡住，所以这里单独给 90 s。
+  const headerTimer = setTimeout(
+    () => abort.abort(new Error("part_header_timeout")),
+    PART_HEADER_TIMEOUT_MS,
+  );
+  const response = fetchTelegramRange(env, part.bot, part.fid, low, high, budget, 3, abort.signal, 0);
+  return { response, abort, headerTimer };
 }
 
 export default {
@@ -137,24 +174,67 @@ async function handleDownload(
     throw new HttpError(500, "part_layout_mismatch");
   }
 
+  // 预算必须在写响应头之前立好。每个 part 固定要 2 个 subrequest：getFile 换 file_path
+  // （每个 part 的 telegram_file_id 不同，缓存键也不同，所以省不掉）、range 取字节。
+  // 若连"每块各取一次、一次都不重试"都放不下，就现在拒绝——此时响应头还没发，
+  // 客户端能拿到真正的 503 并自行改用 Range 分段请求，而不是收到传了一半的 200。
+  const budget = new SubrequestBudget();
+  if (!budget.canAfford(2 * needed.length)) {
+    throw new HttpError(
+      503,
+      `subrequest_budget_too_small_parts_${needed.length}_limit_${SUBREQUEST_LIMIT}`,
+    );
+  }
+
   // 定长流：运行时替我们维护 Content-Length 与已写字节数。
   // 写少了会在 close 时报错，客户端因此能看到截断而不是静默的短响应。
   const { readable, writable } = new FixedLengthStream(selection.length);
 
   // 后台泵送，不阻塞响应返回；body 直接交给 pipeTo，JS 不触碰任何字节。
+  //
+  // 关键：相邻 part 的上游握手要重叠。若在循环里"取一块、等它、再取下一块"，
+  // 每换一次 part 都要空等一次 api.telegram.org 的响应头（实测 ~0.55 s，16 part
+  // 的文件被边界拖慢 ~9 s）。这里让下一块的 fetch 在上一块开始传输时就发出去，
+  // 握手完全藏在传输时间里；同时仍只有一块的字节真正经过 pipeTo，CPU 不变。
   void (async () => {
+    const inflight: PartStream[] = [];
+    const startPartAt = (index: number): void => {
+      if (index >= needed.length) return;
+      const part = needed[index] as ManifestPart;
+      // 先替后面的块把额度占住：每一块至少要 1 次 range fetch（file_path 命中缓存时
+      // getFile 不花钱），所以留下 2 * 剩余块数是下限。重试只能花超出这部分的空间，
+      // 否则前面某一块的抖动会把后面块的基本额度吃光，把局部问题放大成整条响应失败。
+      budget.hold(2 * (needed.length - index - 1));
+      inflight.push(
+        startPartFetch(
+          env,
+          part,
+          Math.max(selection.start, part.off) - part.off,
+          Math.min(selection.end, part.off + part.len - 1) - part.off,
+          budget,
+        ),
+      );
+    };
+
     try {
-      for (const part of needed) {
-        const low = Math.max(selection.start, part.off) - part.off;
-        const high = Math.min(selection.end, part.off + part.len - 1) - part.off;
-        // 每个 part 一个独立的看门狗：上游一旦停止送字节，fetch 自带的超时不会再生效
-        // （它只覆盖到响应头为止），必须由我们自己打断 body 流，否则响应会永远挂着。
-        const watchdog = new AbortController();
-        const timer = setTimeout(() => watchdog.abort(), PART_STREAM_TIMEOUT_MS);
+      for (let index = 0; index < needed.length; index += 1) {
+        // 让第 index 块以及它后面的 PREFETCH_DEPTH 块都已在飞。
+        while (inflight.length <= PREFETCH_DEPTH && index + inflight.length < needed.length) {
+          startPartAt(index + inflight.length);
+        }
+        const current = inflight.shift() as PartStream;
+        const upstream = await current.response;
+        // 响应头已到，握手预算用完了；接下来的预算属于字节传输。
+        clearTimeout(current.headerTimer);
+        const body = upstream.body;
+        if (!body) throw new HttpError(502, "telegram_short_read");
+        // 传输看门狗：上游一旦停止送字节，fetch 自带的超时不会再生效（它只覆盖到
+        // 响应头为止），必须由我们自己打断 body 流，否则响应会永远挂着。
+        const watchdog = setTimeout(
+          () => current.abort.abort(new Error("part_stream_timeout")),
+          PART_STREAM_TIMEOUT_MS,
+        );
         try {
-          const upstream = await fetchTelegramRange(env, part.bot, part.fid, low, high, 3, watchdog.signal);
-          const body = upstream.body;
-          if (!body) throw new HttpError(502, "telegram_short_read");
           // 上游忽略 Range 而多给的字节由 FixedLengthStream 兜住（超出会直接报错）。
           await body.pipeTo(writable, {
             preventClose: true,
@@ -162,11 +242,16 @@ async function handleDownload(
             preventCancel: true,
           });
         } finally {
-          clearTimeout(timer);
+          clearTimeout(watchdog);
         }
       }
       await writable.close();
     } catch (error) {
+      // 已经预取但还没消费的块必须显式丢弃，否则它们的响应体会一直挂在运行时里。
+      for (const pending of inflight) {
+        clearTimeout(pending.headerTimer);
+        pending.abort.abort(error instanceof Error ? error : new Error("stream_aborted"));
+      }
       // 响应头早已提交，这里唯一正确的收尾就是把流打断，让客户端看到传输未完成。
       console.error(
         "gateway_stream_aborted",

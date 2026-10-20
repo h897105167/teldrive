@@ -6,6 +6,7 @@
 //   4. token 与 file_path 绝不可出现在日志、响应体或错误信息中。
 
 import { HttpError } from "./errors";
+import type { SubrequestBudget } from "./budget";
 
 export interface Env {
   CHANNEL_ID: string;
@@ -61,9 +62,10 @@ export async function retryAfterSeconds(response: Response, attempt: number): Pr
   return Math.min(2 ** attempt, 5);
 }
 
-async function callBotAPI<T>(url: string, attempts = 3): Promise<T> {
+async function callBotAPI<T>(url: string, budget: SubrequestBudget, attempts = 3): Promise<T> {
   let rateLimited = false;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
+    budget.take("botapi");
     const response = await fetch(url, { signal: AbortSignal.timeout(BOT_API_TIMEOUT_MS) });
     if (response.status === 429) {
       rateLimited = true;
@@ -88,7 +90,12 @@ async function callBotAPI<T>(url: string, attempts = 3): Promise<T> {
 }
 
 // getFile 换 file_path，结果进 Cache API。
-export async function telegramFilePath(env: Env, slot: number, fileID: string): Promise<string> {
+export async function telegramFilePath(
+  env: Env,
+  slot: number,
+  fileID: string,
+  budget: SubrequestBudget,
+): Promise<string> {
   const token = botToken(env, slot);
   if (!token) throw new HttpError(500, "bot_token_unset");
 
@@ -102,6 +109,7 @@ export async function telegramFilePath(env: Env, slot: number, fileID: string): 
 
   const result = await callBotAPI<{ file_path?: string }>(
     `https://api.telegram.org/bot${token}/getFile?file_id=${encodeURIComponent(fileID)}`,
+    budget,
   );
   if (!result.file_path) throw new HttpError(404, "telegram_file_missing");
 
@@ -134,18 +142,28 @@ export async function fetchTelegramRange(
   fileID: string,
   low: number,
   high: number,
+  budget: SubrequestBudget,
   attempts = 3,
   externalSignal?: AbortSignal,
+  rangeTimeoutMs = RANGE_TIMEOUT_MS,
 ): Promise<Response> {
   const token = botToken(env, slot);
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const filePath = await telegramFilePath(env, slot, fileID);
-    const deadline = AbortSignal.timeout(RANGE_TIMEOUT_MS);
+    const filePath = await telegramFilePath(env, slot, fileID, budget);
+    // rangeTimeoutMs === 0 表示调用方自己掌握预算（预取时握手提前发起，等字节的时间
+    // 取决于客户端消费速度，不能在这里按固定的 90 s 砍断）。传 0 而不是 Infinity：
+    // AbortSignal.timeout(0) 会立即中止，所以必须走"不设内部 deadline"的分支。
+    const deadline = rangeTimeoutMs > 0 ? AbortSignal.timeout(rangeTimeoutMs) : undefined;
+    const signal = externalSignal && deadline
+      ? AbortSignal.any([externalSignal, deadline])
+      : (externalSignal ?? deadline);
+    // 每次尝试都要真花掉一个 subrequest，超预算时在这里就失败，而不是让运行时掐断响应。
+    budget.take("range");
     const response = await fetch(`https://api.telegram.org/file/bot${token}/${filePath}`, {
       method: "GET",
       headers: { Range: `bytes=${low}-${high}` },
       // 连接或读取卡住时必须失败：调用方会重试，而不是让整个响应永久挂起。
-      signal: externalSignal ? AbortSignal.any([externalSignal, deadline]) : deadline,
+      signal,
     });
 
     if (response.status === 206 || response.status === 200) {
