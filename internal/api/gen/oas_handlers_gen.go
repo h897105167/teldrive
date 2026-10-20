@@ -6624,7 +6624,7 @@ func (s *Server) handleGetFileViewStateRequest(args [1]string, argsEscaped bool,
 
 // handleGetGatewaySettingsRequest handles getGatewaySettings operation.
 //
-// Read the gateway data-plane settings (download-split threshold).
+// Read the gateway data-plane settings (mode, Worker URL, download split).
 //
 // GET /v1/settings/gateway
 func (s *Server) handleGetGatewaySettingsRequest(args [0]string, argsEscaped bool, w http.ResponseWriter, r *http.Request) {
@@ -17536,8 +17536,10 @@ func (s *Server) handleUpdateFileAccessGrantRequest(args [1]string, argsEscaped 
 
 // handleUpdateGatewaySettingsRequest handles updateGatewaySettings operation.
 //
-// Hot-update the gateway download-split threshold. Persists `worker-min-bytes` to config.toml and
-// applies it to the running gateway service immediately, without a restart.
+// Hot-update the gateway data plane: switch between the Cloudflare Worker and this server, and/or
+// change the download-split threshold. Both fields are optional, so a mode switch does not require
+// resending the threshold. Persists to config.toml and applies to the running gateway service
+// immediately, without a restart.
 //
 // PUT /v1/settings/gateway
 func (s *Server) handleUpdateGatewaySettingsRequest(args [0]string, argsEscaped bool, w http.ResponseWriter, r *http.Request) {

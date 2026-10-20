@@ -2948,7 +2948,7 @@ paths:
   /v1/settings/gateway:
     get:
       operationId: getGatewaySettings
-      description: Read the gateway data-plane settings (download-split threshold).
+      description: Read the gateway data-plane settings (mode, Worker URL, download split).
       parameters: []
       responses:
         "200":
@@ -2965,10 +2965,18 @@ paths:
         - ExternalApiKeyAuth: []
     put:
       operationId: updateGatewaySettings
-      description: |-
-        Hot-update the gateway download-split threshold.  Persists
-        `worker-min-bytes` to config.toml and applies it to the running
-        gateway service immediately, without a restart.
+      description: >-
+        Hot-update the gateway data plane: switch between the Cloudflare Worker
+        and
+
+        this server, and/or change the download-split threshold.  Both fields
+        are
+
+        optional, so a mode switch does not require resending the threshold.
+
+        Persists to config.toml and applies to the running gateway service
+
+        immediately, without a restart.
       parameters: []
       responses:
         "200":
@@ -7357,11 +7365,19 @@ components:
             Worker to the existing `teldrive-gateway.{zone}` hostname on the
             first zone.
       description: Request body for one-click Cloudflare Worker deployment.
+    GatewayMode:
+      type: string
+      enum:
+        - worker
+        - vps
+      description: Which data plane serves download and upload bytes.
     GatewaySettings:
       type: object
       required:
         - gatewayEnabled
         - workerMinBytes
+        - mode
+        - workerUrl
       properties:
         gatewayEnabled:
           type: boolean
@@ -7379,17 +7395,42 @@ components:
             images) suffer the Worker's extra edge hop.  `0` routes every
 
             gateway-eligible file through the Worker.
+        mode:
+          allOf:
+            - $ref: "#/components/schemas/GatewayMode"
+          description: Data plane currently serving bytes.
+        workerUrl:
+          type: string
+          description: Configured Worker base URL, empty when the gateway was never
+            deployed.
       description: Gateway data-plane settings surfaced in the settings UI.
     GatewaySettingsUpdate:
       type: object
-      required:
-        - workerMinBytes
       properties:
         workerMinBytes:
           type: integer
           format: int64
           minimum: 0
-          description: New download-split threshold in bytes.  Must be zero or positive.
+          description: >-
+            New download-split threshold in bytes.  Must be zero or
+            positive.  Omit to
+
+            leave the current threshold unchanged.
+        mode:
+          allOf:
+            - $ref: "#/components/schemas/GatewayMode"
+          description: >-
+            Switch the data plane.  `worker` requires a deployed, reachable
+            Worker;
+
+            the server probes `{workerUrl}/healthz` first and rejects the change
+            when
+
+            the Worker does not answer, so traffic is never pointed at a dead
+            host.
+
+            `vps` always succeeds and falls back to streaming through this
+            server.
       description: Mutable gateway settings.
     UploadState:
       type: string

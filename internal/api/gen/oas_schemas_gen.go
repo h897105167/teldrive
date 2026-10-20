@@ -5166,6 +5166,49 @@ func (s *FolderCreateRequestConflictPolicy) UnmarshalText(data []byte) error {
 	}
 }
 
+// Which data plane serves download and upload bytes.
+// Ref: #/components/schemas/GatewayMode
+type GatewayMode string
+
+const (
+	GatewayModeWorker GatewayMode = "worker"
+	GatewayModeVps    GatewayMode = "vps"
+)
+
+// AllValues returns all GatewayMode values.
+func (GatewayMode) AllValues() []GatewayMode {
+	return []GatewayMode{
+		GatewayModeWorker,
+		GatewayModeVps,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s GatewayMode) MarshalText() ([]byte, error) {
+	switch s {
+	case GatewayModeWorker:
+		return []byte(s), nil
+	case GatewayModeVps:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *GatewayMode) UnmarshalText(data []byte) error {
+	switch GatewayMode(data) {
+	case GatewayModeWorker:
+		*s = GatewayModeWorker
+		return nil
+	case GatewayModeVps:
+		*s = GatewayModeVps
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
 // Gateway data-plane settings surfaced in the settings UI.
 // Ref: #/components/schemas/GatewaySettings
 type GatewaySettings struct {
@@ -5175,6 +5218,10 @@ type GatewaySettings struct {
 	// Cloudflare Worker: small files (thumbnails, images) suffer the Worker's extra edge hop. `0` routes
 	// every gateway-eligible file through the Worker.
 	WorkerMinBytes int64 `json:"workerMinBytes"`
+	// Data plane currently serving bytes.
+	Mode GatewayMode `json:"mode"`
+	// Configured Worker base URL, empty when the gateway was never deployed.
+	WorkerUrl string `json:"workerUrl"`
 }
 
 // GetGatewayEnabled returns the value of GatewayEnabled.
@@ -5187,6 +5234,16 @@ func (s *GatewaySettings) GetWorkerMinBytes() int64 {
 	return s.WorkerMinBytes
 }
 
+// GetMode returns the value of Mode.
+func (s *GatewaySettings) GetMode() GatewayMode {
+	return s.Mode
+}
+
+// GetWorkerUrl returns the value of WorkerUrl.
+func (s *GatewaySettings) GetWorkerUrl() string {
+	return s.WorkerUrl
+}
+
 // SetGatewayEnabled sets the value of GatewayEnabled.
 func (s *GatewaySettings) SetGatewayEnabled(val bool) {
 	s.GatewayEnabled = val
@@ -5197,23 +5254,48 @@ func (s *GatewaySettings) SetWorkerMinBytes(val int64) {
 	s.WorkerMinBytes = val
 }
 
+// SetMode sets the value of Mode.
+func (s *GatewaySettings) SetMode(val GatewayMode) {
+	s.Mode = val
+}
+
+// SetWorkerUrl sets the value of WorkerUrl.
+func (s *GatewaySettings) SetWorkerUrl(val string) {
+	s.WorkerUrl = val
+}
+
 func (*GatewaySettings) updateGatewaySettingsRes() {}
 
 // Mutable gateway settings.
 // Ref: #/components/schemas/GatewaySettingsUpdate
 type GatewaySettingsUpdate struct {
-	// New download-split threshold in bytes. Must be zero or positive.
-	WorkerMinBytes int64 `json:"workerMinBytes"`
+	// New download-split threshold in bytes. Must be zero or positive. Omit to leave the current threshold
+	// unchanged.
+	WorkerMinBytes OptInt64 `json:"workerMinBytes"`
+	// Switch the data plane. `worker` requires a deployed, reachable Worker; the server probes
+	// `{workerUrl}/healthz` first and rejects the change when the Worker does not answer, so traffic is
+	// never pointed at a dead host. `vps` always succeeds and falls back to streaming through this server.
+	Mode OptGatewayMode `json:"mode"`
 }
 
 // GetWorkerMinBytes returns the value of WorkerMinBytes.
-func (s *GatewaySettingsUpdate) GetWorkerMinBytes() int64 {
+func (s *GatewaySettingsUpdate) GetWorkerMinBytes() OptInt64 {
 	return s.WorkerMinBytes
 }
 
+// GetMode returns the value of Mode.
+func (s *GatewaySettingsUpdate) GetMode() OptGatewayMode {
+	return s.Mode
+}
+
 // SetWorkerMinBytes sets the value of WorkerMinBytes.
-func (s *GatewaySettingsUpdate) SetWorkerMinBytes(val int64) {
+func (s *GatewaySettingsUpdate) SetWorkerMinBytes(val OptInt64) {
 	s.WorkerMinBytes = val
+}
+
+// SetMode sets the value of Mode.
+func (s *GatewaySettingsUpdate) SetMode(val OptGatewayMode) {
+	s.Mode = val
 }
 
 type GetFileCategoryStatisticsOKApplicationJSON []FileCategoryStatistics
@@ -8451,6 +8533,52 @@ func (o OptFolderCreateRequestConflictPolicy) Get() (v FolderCreateRequestConfli
 
 // Or returns value if set, or given parameter if does not.
 func (o OptFolderCreateRequestConflictPolicy) Or(d FolderCreateRequestConflictPolicy) FolderCreateRequestConflictPolicy {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptGatewayMode returns new OptGatewayMode with value set to v.
+func NewOptGatewayMode(v GatewayMode) OptGatewayMode {
+	return OptGatewayMode{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptGatewayMode is optional GatewayMode.
+type OptGatewayMode struct {
+	Value GatewayMode
+	Set   bool
+}
+
+// IsSet returns true if OptGatewayMode was set.
+func (o OptGatewayMode) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptGatewayMode) Reset() {
+	var v GatewayMode
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptGatewayMode) SetTo(v GatewayMode) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptGatewayMode) Get() (v GatewayMode, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptGatewayMode) Or(d GatewayMode) GatewayMode {
 	if v, ok := o.Get(); ok {
 		return v
 	}

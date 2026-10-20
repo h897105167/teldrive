@@ -43,6 +43,15 @@ model SettingsProbe {
   gatewayEnabled: boolean;
 }
 
+/** Which data plane serves download and upload bytes. */
+enum GatewayMode {
+  /** Bytes are redirected to the Cloudflare Worker. */
+  worker: "worker",
+
+  /** Bytes are streamed by this server straight from Telegram. */
+  vps: "vps",
+}
+
 /** Gateway data-plane settings surfaced in the settings UI. */
 model GatewaySettings {
   /** True when the gateway data plane (Cloudflare Worker) is configured. */
@@ -55,13 +64,30 @@ model GatewaySettings {
    * gateway-eligible file through the Worker.
    */
   workerMinBytes: int64;
+
+  /** Data plane currently serving bytes. */
+  mode: GatewayMode;
+
+  /** Configured Worker base URL, empty when the gateway was never deployed. */
+  workerUrl: string;
 }
 
 /** Mutable gateway settings. */
 model GatewaySettingsUpdate {
-  /** New download-split threshold in bytes.  Must be zero or positive. */
+  /**
+   * New download-split threshold in bytes.  Must be zero or positive.  Omit to
+   * leave the current threshold unchanged.
+   */
   @minValue(0)
-  workerMinBytes: int64;
+  workerMinBytes?: int64;
+
+  /**
+   * Switch the data plane.  `worker` requires a deployed, reachable Worker;
+   * the server probes `{workerUrl}/healthz` first and rejects the change when
+   * the Worker does not answer, so traffic is never pointed at a dead host.
+   * `vps` always succeeds and falls back to streaming through this server.
+   */
+  mode?: GatewayMode;
 }
 
 @tag("Settings")
@@ -97,16 +123,18 @@ namespace Settings {
     | ErrorResponse<409>
     | ErrorResponse<422>;
 
-  /** Read the gateway data-plane settings (download-split threshold). */
+  /** Read the gateway data-plane settings (mode, Worker URL, download split). */
   @get
   @route("/gateway")
   @operationId("getGatewaySettings")
   op getGatewaySettings(): JsonResponse<200, GatewaySettings>;
 
   /**
-   * Hot-update the gateway download-split threshold.  Persists
-   * `worker-min-bytes` to config.toml and applies it to the running
-   * gateway service immediately, without a restart.
+   * Hot-update the gateway data plane: switch between the Cloudflare Worker and
+   * this server, and/or change the download-split threshold.  Both fields are
+   * optional, so a mode switch does not require resending the threshold.
+   * Persists to config.toml and applies to the running gateway service
+   * immediately, without a restart.
    */
   @put
   @route("/gateway")

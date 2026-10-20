@@ -112,8 +112,10 @@ func (h *Handler) GetSettingsProbe(ctx context.Context) (*gen.SettingsProbe, err
 	gatewayEnabled := false
 	if h.RuntimeConfig != nil {
 		apiTokenConfigured = strings.TrimSpace(h.RuntimeConfig.Cloudflare.APITokenCiphertext) != ""
-		gatewayEnabled = h.RuntimeConfig.Gateway.Enabled
 	}
+	// Report the live switch, not the startup snapshot: the settings page shows
+	// this next to the mode toggle, so it must follow a hot switch.
+	gatewayEnabled = h.Gateway != nil && h.Gateway.Enabled()
 	return &gen.SettingsProbe{
 		CloudflareApiTokenConfigured: apiTokenConfigured,
 		GatewayEnabled:               gatewayEnabled,
@@ -123,43 +125,121 @@ func (h *Handler) GetSettingsProbe(ctx context.Context) (*gen.SettingsProbe, err
 // GetGatewaySettings implements the ogen GetGatewaySettings operation.
 func (h *Handler) GetGatewaySettings(ctx context.Context) (*gen.GatewaySettings, error) {
 	_ = ctx
-	var settings gen.GatewaySettings
-	if h.RuntimeConfig != nil {
-		settings.GatewayEnabled = h.Gateway != nil && h.Gateway.Enabled()
-		settings.WorkerMinBytes = h.RuntimeConfig.Gateway.WorkerMinBytes
-	} else if h.Gateway != nil {
+	return h.gatewaySettings(), nil
+}
+
+// gatewaySettings assembles the current data-plane view for both settings ops.
+func (h *Handler) gatewaySettings() *gen.GatewaySettings {
+	settings := &gen.GatewaySettings{Mode: gen.GatewayModeVps}
+	if h.Gateway != nil {
 		settings.WorkerMinBytes = h.Gateway.WorkerMinBytes()
+		settings.WorkerUrl = h.Gateway.PublicURL()
+		if h.Gateway.Enabled() {
+			settings.Mode = gen.GatewayModeWorker
+		}
+		settings.GatewayEnabled = h.Gateway.Configured()
+	} else if h.RuntimeConfig != nil {
+		settings.WorkerMinBytes = h.RuntimeConfig.Gateway.WorkerMinBytes
+		settings.WorkerUrl = h.RuntimeConfig.Gateway.PublicURL
 	}
-	return &settings, nil
+	return settings
 }
 
 // UpdateGatewaySettings implements the ogen UpdateGatewaySettings operation:
-// hot-apply the download-split threshold and persist it to config.toml.
-func (h *Handler) UpdateGatewaySettings(_ context.Context, req *gen.GatewaySettingsUpdate) (gen.UpdateGatewaySettingsRes, error) {
-	if req == nil || req.WorkerMinBytes < 0 {
-		return nil, problem(http.StatusUnprocessableEntity, "invalid_request", "worker-min-bytes must be zero or positive", nil)
+// hot-apply the data-plane mode and/or the download-split threshold, then
+// persist both to config.toml.  Every field is optional so the UI can flip the
+// mode without resending the threshold.
+func (h *Handler) UpdateGatewaySettings(ctx context.Context, req *gen.GatewaySettingsUpdate) (gen.UpdateGatewaySettingsRes, error) {
+	if req == nil {
+		return nil, problem(http.StatusUnprocessableEntity, "invalid_request", "request body is required", nil)
 	}
 	if h.RuntimeConfig == nil || h.ConfigPath == "" {
 		return nil, problem(http.StatusInternalServerError, "config_unavailable", "runtime config is not available", nil)
 	}
-	// 1. Hot-apply to the running gateway service (atomic, no restart).
-	if h.Gateway != nil {
-		h.Gateway.SetWorkerMinBytes(req.WorkerMinBytes)
-	}
-	h.RuntimeConfig.Gateway.WorkerMinBytes = req.WorkerMinBytes
-
-	// 2. Persist to config.toml so the value survives restarts; on write
-	//    failure the hot value stays applied for this process lifetime and
-	//    the next restart falls back to the on-disk (authoritative) value.
-	if err := cloudflare.SaveGatewayWorkerMinBytes(h.ConfigPath, req.WorkerMinBytes); err != nil {
-		return nil, problem(http.StatusInternalServerError, "config_write_failed", "could not persist worker-min-bytes", err)
+	if h.Gateway == nil {
+		return nil, problem(http.StatusInternalServerError, "gateway_unavailable", "gateway service is not initialised", nil)
 	}
 
-	enabled := h.Gateway != nil && h.Gateway.Enabled()
-	return &gen.GatewaySettings{
-		GatewayEnabled: enabled,
-		WorkerMinBytes: req.WorkerMinBytes,
-	}, nil
+	var (
+		nextEnabled *bool
+		nextMin     *int64
+	)
+	if req.WorkerMinBytes.Set {
+		value := req.WorkerMinBytes.Value
+		if value < 0 {
+			return nil, problem(http.StatusUnprocessableEntity, "invalid_request", "worker-min-bytes must be zero or positive", nil)
+		}
+		nextMin = &value
+	}
+	if req.Mode.Set {
+		switch req.Mode.Value {
+		case gen.GatewayModeWorker:
+			// Refuse to point traffic at a Worker that does not answer: a dead
+			// host turns every download into a redirect the client cannot follow.
+			if !h.Gateway.Configured() {
+				return nil, problem(http.StatusUnprocessableEntity, "gateway_not_configured",
+					"gateway is not configured; deploy the Worker first", nil)
+			}
+			if err := probeWorkerHealth(ctx, h.Gateway.PublicURL()); err != nil {
+				return nil, problem(http.StatusUnprocessableEntity, "gateway_unreachable",
+					"the Cloudflare Worker did not answer its health check; staying on the VPS data plane", err)
+			}
+			enabled := true
+			nextEnabled = &enabled
+		case gen.GatewayModeVps:
+			enabled := false
+			nextEnabled = &enabled
+		default:
+			return nil, problem(http.StatusUnprocessableEntity, "invalid_request", "mode must be worker or vps", nil)
+		}
+	}
+	if nextEnabled == nil && nextMin == nil {
+		return nil, problem(http.StatusUnprocessableEntity, "invalid_request", "nothing to update", nil)
+	}
+
+	// 1. Persist first: a failed write must not leave the process serving a mode
+	//    that a restart would silently revert.
+	if err := cloudflare.SaveGatewaySettings(h.ConfigPath, nextEnabled, nextMin); err != nil {
+		return nil, problem(http.StatusInternalServerError, "config_write_failed", "could not persist gateway settings", err)
+	}
+
+	// 2. Hot-apply to the running service (atomic, no restart).
+	if nextEnabled != nil {
+		h.Gateway.SetEnabled(*nextEnabled)
+		h.RuntimeConfig.Gateway.Enabled = *nextEnabled
+	}
+	if nextMin != nil {
+		h.Gateway.SetWorkerMinBytes(*nextMin)
+		h.RuntimeConfig.Gateway.WorkerMinBytes = *nextMin
+	}
+
+	return h.gatewaySettings(), nil
+}
+
+// probeWorkerHealth asks the Worker for /healthz.  It is deliberately short: the
+// settings call should fail fast rather than hang the UI while a deleted Worker
+// times out at the edge.
+func probeWorkerHealth(ctx context.Context, publicURL string) error {
+	base := strings.TrimRight(strings.TrimSpace(publicURL), "/")
+	if base == "" {
+		return fmt.Errorf("gateway public URL is empty")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/healthz", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := (&http.Client{Timeout: 8 * time.Second}).Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("health check returned HTTP %d", resp.StatusCode)
+	}
+	return nil
 }
 
 // resolveEnabledBots returns the slot-ordered bot IDs and their decrypted

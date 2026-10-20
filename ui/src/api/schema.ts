@@ -935,12 +935,14 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Read the gateway data-plane settings (download-split threshold). */
+        /** @description Read the gateway data-plane settings (mode, Worker URL, download split). */
         get: operations["getGatewaySettings"];
         /**
-         * @description Hot-update the gateway download-split threshold.  Persists
-         *     `worker-min-bytes` to config.toml and applies it to the running
-         *     gateway service immediately, without a restart.
+         * @description Hot-update the gateway data plane: switch between the Cloudflare Worker and
+         *     this server, and/or change the download-split threshold.  Both fields are
+         *     optional, so a mode switch does not require resending the threshold.
+         *     Persists to config.toml and applies to the running gateway service
+         *     immediately, without a restart.
          */
         put: operations["updateGatewaySettings"];
         post?: never;
@@ -2110,6 +2112,11 @@ export interface components {
              */
             targetZone?: string;
         };
+        /**
+         * @description Which data plane serves download and upload bytes.
+         * @enum {string}
+         */
+        GatewayMode: "worker" | "vps";
         /** @description Gateway data-plane settings surfaced in the settings UI. */
         GatewaySettings: {
             /** @description True when the gateway data plane (Cloudflare Worker) is configured. */
@@ -2122,14 +2129,26 @@ export interface components {
              *     gateway-eligible file through the Worker.
              */
             workerMinBytes: number;
+            /** @description Data plane currently serving bytes. */
+            mode: components["schemas"]["GatewayMode"];
+            /** @description Configured Worker base URL, empty when the gateway was never deployed. */
+            workerUrl: string;
         };
         /** @description Mutable gateway settings. */
         GatewaySettingsUpdate: {
             /**
              * Format: int64
-             * @description New download-split threshold in bytes.  Must be zero or positive.
+             * @description New download-split threshold in bytes.  Must be zero or positive.  Omit to
+             *     leave the current threshold unchanged.
              */
-            workerMinBytes: number;
+            workerMinBytes?: number;
+            /**
+             * @description Switch the data plane.  `worker` requires a deployed, reachable Worker;
+             *     the server probes `{workerUrl}/healthz` first and rejects the change when
+             *     the Worker does not answer, so traffic is never pointed at a dead host.
+             *     `vps` always succeeds and falls back to streaming through this server.
+             */
+            mode?: components["schemas"]["GatewayMode"];
         };
         /** @enum {string} */
         UploadState: "open" | "completing" | "completed" | "aborted" | "expired";

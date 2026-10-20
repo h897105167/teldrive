@@ -12077,6 +12077,46 @@ func (s *FolderCreateRequestConflictPolicy) UnmarshalJSON(data []byte) error {
 	return s.Decode(d)
 }
 
+// Encode encodes GatewayMode as json.
+func (s GatewayMode) Encode(e *jx.Encoder) {
+	e.Str(string(s))
+}
+
+// Decode decodes GatewayMode from json.
+func (s *GatewayMode) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode GatewayMode to nil")
+	}
+	v, err := d.StrBytes()
+	if err != nil {
+		return err
+	}
+	// Try to use constant string.
+	switch GatewayMode(v) {
+	case GatewayModeWorker:
+		*s = GatewayModeWorker
+	case GatewayModeVps:
+		*s = GatewayModeVps
+	default:
+		*s = GatewayMode(v)
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s GatewayMode) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *GatewayMode) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
 // Encode implements json.Marshaler.
 func (s *GatewaySettings) Encode(e *jx.Encoder) {
 	e.ObjStart()
@@ -12094,11 +12134,21 @@ func (s *GatewaySettings) encodeFields(e *jx.Encoder) {
 		e.FieldStart("workerMinBytes")
 		e.Int64(s.WorkerMinBytes)
 	}
+	{
+		e.FieldStart("mode")
+		s.Mode.Encode(e)
+	}
+	{
+		e.FieldStart("workerUrl")
+		e.Str(s.WorkerUrl)
+	}
 }
 
-var jsonFieldsNameOfGatewaySettings = [2]string{
+var jsonFieldsNameOfGatewaySettings = [4]string{
 	0: "gatewayEnabled",
 	1: "workerMinBytes",
+	2: "mode",
+	3: "workerUrl",
 }
 
 // Decode decodes GatewaySettings from json.
@@ -12134,6 +12184,28 @@ func (s *GatewaySettings) Decode(d *jx.Decoder) error {
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"workerMinBytes\"")
 			}
+		case "mode":
+			requiredBitSet[0] |= 1 << 2
+			if err := func() error {
+				if err := s.Mode.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"mode\"")
+			}
+		case "workerUrl":
+			requiredBitSet[0] |= 1 << 3
+			if err := func() error {
+				v, err := d.Str()
+				s.WorkerUrl = string(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"workerUrl\"")
+			}
 		default:
 			return d.Skip()
 		}
@@ -12144,7 +12216,7 @@ func (s *GatewaySettings) Decode(d *jx.Decoder) error {
 	// Validate required fields.
 	var failures []validate.FieldError
 	for i, mask := range [1]uint8{
-		0b00000011,
+		0b00001111,
 	} {
 		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
 			// Mask only required fields and check equality to mask using XOR.
@@ -12200,13 +12272,22 @@ func (s *GatewaySettingsUpdate) Encode(e *jx.Encoder) {
 // encodeFields encodes fields.
 func (s *GatewaySettingsUpdate) encodeFields(e *jx.Encoder) {
 	{
-		e.FieldStart("workerMinBytes")
-		e.Int64(s.WorkerMinBytes)
+		if s.WorkerMinBytes.Set {
+			e.FieldStart("workerMinBytes")
+			s.WorkerMinBytes.Encode(e)
+		}
+	}
+	{
+		if s.Mode.Set {
+			e.FieldStart("mode")
+			s.Mode.Encode(e)
+		}
 	}
 }
 
-var jsonFieldsNameOfGatewaySettingsUpdate = [1]string{
+var jsonFieldsNameOfGatewaySettingsUpdate = [2]string{
 	0: "workerMinBytes",
+	1: "mode",
 }
 
 // Decode decodes GatewaySettingsUpdate from json.
@@ -12214,21 +12295,28 @@ func (s *GatewaySettingsUpdate) Decode(d *jx.Decoder) error {
 	if s == nil {
 		return errors.New("invalid: unable to decode GatewaySettingsUpdate to nil")
 	}
-	var requiredBitSet [1]uint8
 
 	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
 		switch string(k) {
 		case "workerMinBytes":
-			requiredBitSet[0] |= 1 << 0
 			if err := func() error {
-				v, err := d.Int64()
-				s.WorkerMinBytes = int64(v)
-				if err != nil {
+				s.WorkerMinBytes.Reset()
+				if err := s.WorkerMinBytes.Decode(d); err != nil {
 					return err
 				}
 				return nil
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"workerMinBytes\"")
+			}
+		case "mode":
+			if err := func() error {
+				s.Mode.Reset()
+				if err := s.Mode.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"mode\"")
 			}
 		default:
 			return d.Skip()
@@ -12236,38 +12324,6 @@ func (s *GatewaySettingsUpdate) Decode(d *jx.Decoder) error {
 		return nil
 	}); err != nil {
 		return errors.Wrap(err, "decode GatewaySettingsUpdate")
-	}
-	// Validate required fields.
-	var failures []validate.FieldError
-	for i, mask := range [1]uint8{
-		0b00000001,
-	} {
-		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
-			// Mask only required fields and check equality to mask using XOR.
-			//
-			// If XOR result is not zero, result is not equal to expected, so some fields are missed.
-			// Bits of fields which would be set are actually bits of missed fields.
-			missed := bits.OnesCount8(result)
-			for bitN := 0; bitN < missed; bitN++ {
-				bitIdx := bits.TrailingZeros8(result)
-				fieldIdx := i*8 + bitIdx
-				var name string
-				if fieldIdx < len(jsonFieldsNameOfGatewaySettingsUpdate) {
-					name = jsonFieldsNameOfGatewaySettingsUpdate[fieldIdx]
-				} else {
-					name = strconv.Itoa(fieldIdx)
-				}
-				failures = append(failures, validate.FieldError{
-					Name:  name,
-					Error: validate.ErrFieldRequired,
-				})
-				// Reset bit.
-				result &^= 1 << bitIdx
-			}
-		}
-	}
-	if len(failures) > 0 {
-		return &validate.Error{Fields: failures}
 	}
 
 	return nil
@@ -18832,6 +18888,39 @@ func (s OptFolderCreateRequestConflictPolicy) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON implements stdjson.Unmarshaler.
 func (s *OptFolderCreateRequestConflictPolicy) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes GatewayMode as json.
+func (o OptGatewayMode) Encode(e *jx.Encoder) {
+	if !o.Set {
+		return
+	}
+	e.Str(string(o.Value))
+}
+
+// Decode decodes GatewayMode from json.
+func (o *OptGatewayMode) Decode(d *jx.Decoder) error {
+	if o == nil {
+		return errors.New("invalid: unable to decode OptGatewayMode to nil")
+	}
+	o.Set = true
+	if err := o.Value.Decode(d); err != nil {
+		return err
+	}
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s OptGatewayMode) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *OptGatewayMode) UnmarshalJSON(data []byte) error {
 	d := jx.DecodeBytes(data)
 	return s.Decode(d)
 }

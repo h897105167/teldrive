@@ -18,6 +18,35 @@ import (
 // [gateway].worker-min-bytes：先备份，再重载当前配置、只改这一个字段后
 // 原子写回（临时文件 + rename）。任何失败都不会破坏现有配置文件。
 func SaveGatewayWorkerMinBytes(configPath string, workerMinBytes int64) error {
+	return saveGateway(configPath, func(cfg *config.Config) {
+		cfg.Gateway.WorkerMinBytes = workerMinBytes
+	})
+}
+
+// SaveGatewayEnabled 把数据面开关持久化到 config.toml 的 [gateway].enabled。
+// 与 SaveGatewayWorkerMinBytes 共用同一套备份与原子写回流程。
+func SaveGatewayEnabled(configPath string, enabled bool) error {
+	return saveGateway(configPath, func(cfg *config.Config) {
+		cfg.Gateway.Enabled = enabled
+	})
+}
+
+// SaveGatewaySettings 一次性写回开关与阈值：切模式时如果同时改了阈值，
+// 两次独立写回会各留一个备份文件、且中途失败会留下半更新状态，所以合并成一次。
+func SaveGatewaySettings(configPath string, enabled *bool, workerMinBytes *int64) error {
+	return saveGateway(configPath, func(cfg *config.Config) {
+		if enabled != nil {
+			cfg.Gateway.Enabled = *enabled
+		}
+		if workerMinBytes != nil {
+			cfg.Gateway.WorkerMinBytes = *workerMinBytes
+		}
+	})
+}
+
+// saveGateway 读取现有配置、应用 mutate、再原子写回。备份文件名带 UTC 时间戳，
+// 失败时不改动原文件。
+func saveGateway(configPath string, mutate func(*config.Config)) error {
 	if strings.TrimSpace(configPath) == "" {
 		return fmt.Errorf("config path is empty")
 	}
@@ -35,7 +64,7 @@ func SaveGatewayWorkerMinBytes(configPath string, workerMinBytes int64) error {
 	if err != nil {
 		return fmt.Errorf("parse current config from %q: %w", configPath, err)
 	}
-	cfg.Gateway.WorkerMinBytes = workerMinBytes
+	mutate(&cfg)
 
 	tomlBytes, err := marshalConfigTOML(&cfg)
 	if err != nil {

@@ -45,6 +45,29 @@ function CloudflareSettings() {
     },
   });
 
+  // One-click data-plane switch.  The server re-checks that the Worker answers
+  // /healthz before accepting "worker", so a paused or deleted Worker is refused
+  // instead of silently breaking every download.
+  const switchMode = $api.useMutation("put", "/v1/settings/gateway", {
+    onSuccess: (result) => {
+      toast.success(t("cf.modeSwitched"), {
+        description:
+          result.mode === "worker" ? t("cf.modeSwitchedWorker") : t("cf.modeSwitchedVps"),
+      });
+      void gateway.refetch();
+      void probe.refetch();
+    },
+    onError: (error) => {
+      const status = (error as { status?: number } | null)?.status;
+      toast.error(t("cf.modeSwitchFailed"), {
+        description: status === 422 ? t("cf.modeUnreachable") : userMessage(error),
+      });
+    },
+  });
+
+  const activeMode = gateway.data.mode;
+  const workerReady = gateway.data.gatewayEnabled;
+
   const deploy = $api.useMutation("post", "/v1/settings/worker-deploy", {
     onSuccess: async (result) => {
       setDeployed({ workerUrl: result.workerUrl, zoneName: result.zoneName, accountId: result.accountId });
@@ -75,6 +98,39 @@ function CloudflareSettings() {
         </SettingsRow>
         <SettingsRow label={t("cf.gatewayEnabled")} description={t("cf.gatewayEnabledHint")}>
           <StatusPill active={probe.data.gatewayEnabled} labelYes={t("cf.yes")} labelNo={t("cf.no")} />
+        </SettingsRow>
+      </SettingsSection>
+
+      {/* Data plane switch */}
+      <SettingsSection title={t("cf.modeTitle")} description={t("cf.modeDesc")}>
+        <SettingsRow label={t("cf.modeLabel")} description={t("cf.modeHint")} align="start">
+          <div className="space-y-3">
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant={activeMode === "worker" ? "primary" : "secondary"}
+                isDisabled={switchMode.isPending || activeMode === "worker" || !workerReady}
+                onPress={() => switchMode.mutateAsync({ body: { mode: "worker" } })}
+              >
+                {t("cf.modeWorker")}
+              </Button>
+              <Button
+                variant={activeMode === "vps" ? "primary" : "secondary"}
+                isDisabled={switchMode.isPending || activeMode === "vps"}
+                onPress={() => switchMode.mutateAsync({ body: { mode: "vps" } })}
+              >
+                {t("cf.modeVps")}
+              </Button>
+            </div>
+            <p className="text-xs text-muted">
+              {switchMode.isPending
+                ? t("cf.modeSwitching")
+                : !workerReady
+                  ? t("cf.modeNotConfigured")
+                  : `${t("cf.modeCurrent")}: ${
+                      activeMode === "worker" ? t("cf.modeWorker") : t("cf.modeVps")
+                    } · ${gateway.data.workerUrl || t("cf.workerUrlUnknown")}`}
+            </p>
+          </div>
         </SettingsRow>
       </SettingsSection>
 

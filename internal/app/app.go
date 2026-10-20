@@ -238,10 +238,13 @@ func New(ctx context.Context, cfg config.Config, dependencies Dependencies) (*Ap
 	}
 	mux.Use(httpRequestLogger(dependencies.Logger, requestSecurity))
 	// The gateway internal endpoints self-authenticate with a signed ticket, and stay
-	// unregistered (plain 404) while the gateway is disabled.
+	// unregistered (plain 404) while the gateway is unconfigured.  Registration keys off
+	// Configured rather than Enabled: the data-plane switch only decides where bytes are
+	// served from, so flipping it to VPS mode must not remove the callbacks the Worker
+	// needs to pull a manifest after switching back.
 	var gatewayManifest http.Handler
 	var gatewayUploadComplete http.Handler
-	if gatewayService.Enabled() {
+	if gatewayService.Configured() {
 		gatewayManifest = gatewayService.ManifestHandler()
 		gatewayUploadComplete = gatewayService.UploadCompleteHandler(uploadService)
 	}

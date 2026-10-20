@@ -218,7 +218,7 @@ type Handler interface {
 	GetFileViewState(ctx context.Context, params GetFileViewStateParams) (GetFileViewStateRes, error)
 	// GetGatewaySettings implements getGatewaySettings operation.
 	//
-	// Read the gateway data-plane settings (download-split threshold).
+	// Read the gateway data-plane settings (mode, Worker URL, download split).
 	//
 	// GET /v1/settings/gateway
 	GetGatewaySettings(ctx context.Context) (*GatewaySettings, error)
@@ -595,8 +595,10 @@ type Handler interface {
 	UpdateFileAccessGrant(ctx context.Context, req *FileAccessGrantUpdateRequest, params UpdateFileAccessGrantParams) (UpdateFileAccessGrantRes, error)
 	// UpdateGatewaySettings implements updateGatewaySettings operation.
 	//
-	// Hot-update the gateway download-split threshold. Persists `worker-min-bytes` to config.toml and
-	// applies it to the running gateway service immediately, without a restart.
+	// Hot-update the gateway data plane: switch between the Cloudflare Worker and this server, and/or
+	// change the download-split threshold. Both fields are optional, so a mode switch does not require
+	// resending the threshold. Persists to config.toml and applies to the running gateway service
+	// immediately, without a restart.
 	//
 	// PUT /v1/settings/gateway
 	UpdateGatewaySettings(ctx context.Context, req *GatewaySettingsUpdate) (UpdateGatewaySettingsRes, error)

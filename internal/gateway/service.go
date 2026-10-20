@@ -85,6 +85,10 @@ type Config struct {
 type Service struct {
 	store  Store
 	config Config
+	// enabled 是数据面开关的运行时镜像：设置端点可以在不重启的前提下把
+	// 下载/上传切回 VPS 直连（例如 Worker 被停用或不可达时）。配置是否
+	// 齐全由 Configured 单独判断，两者相与才是「真的走 Worker」。
+	enabled atomic.Bool
 	// workerMinBytes 是下载分流阈值的运行时镜像：设置端点会热更新该值，
 	// 下载路径高频并发读取，因此用原子量而非直接读 config。
 	workerMinBytes atomic.Int64
@@ -93,8 +97,40 @@ type Service struct {
 
 func New(store Store, cfg Config) *Service {
 	s := &Service{store: store, config: cfg, now: time.Now}
+	s.enabled.Store(cfg.Enabled)
 	s.workerMinBytes.Store(cfg.WorkerMinBytes)
 	return s
+}
+
+// SetEnabled 热切换数据面：true 走 Cloudflare Worker，false 全部回到本机
+// 直连 Telegram。立即生效、无需重启；持久化由调用方负责。
+func (s *Service) SetEnabled(v bool) {
+	if s == nil {
+		return
+	}
+	s.enabled.Store(v)
+}
+
+// Configured 报告网关是否具备运行所需的配置（与开关无关）。内部 manifest /
+// upload-complete 端点按它注册：开关只影响流量走向，不能让 Worker 的回源
+// 回调随开关一起消失，否则切回 Worker 模式后所有下载都会 404。
+func (s *Service) Configured() bool {
+	return s != nil && s.store != nil &&
+		s.config.PublicURL != "" && s.config.Secret != "" && len(s.config.BotSlots) > 0
+}
+
+// Enabled 报告当前是否真的把流量卸载到 Worker：开关打开且配置齐全。
+func (s *Service) Enabled() bool {
+	return s != nil && s.enabled.Load() && s.Configured()
+}
+
+// PublicURL 返回 Worker 基地址，供设置页展示与连通性探测。末尾斜杠会被去掉：
+// 拼接 /healthz 时出现 "//healthz" 会被边缘当成另一个路径。
+func (s *Service) PublicURL() string {
+	if s == nil {
+		return ""
+	}
+	return strings.TrimRight(s.config.PublicURL, "/")
 }
 
 // SetWorkerMinBytes 热更新下载分流阈值（UI 设置端点调用），立即生效、无需重启。
@@ -111,14 +147,6 @@ func (s *Service) WorkerMinBytes() int64 {
 		return 0
 	}
 	return s.workerMinBytes.Load()
-}
-
-// Enabled 报告网关是否可以工作；nil 接收者视为未启用，便于调用点直接判空。
-func (s *Service) Enabled() bool {
-	return s != nil && s.store != nil && s.config.Enabled &&
-		strings.TrimSpace(s.config.PublicURL) != "" &&
-		strings.TrimSpace(s.config.Secret) != "" &&
-		len(s.config.BotSlots) > 0
 }
 
 // ProxyDownload 在文件完全可由网关服务时签发下载 ticket，返回应 302 到的 Location。
