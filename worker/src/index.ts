@@ -40,8 +40,62 @@ import { HttpError } from "./errors";
 import { SubrequestBudget, SUBREQUEST_LIMIT } from "./budget";
 import { loadManifest, type Manifest, type ManifestPart } from "./manifest";
 import { fetchTelegramRange, type Env } from "./telegram";
-import { verifyTicket } from "./ticket";
+import { signSegment, verifySegment, verifyTicket } from "./ticket";
 import { handleUpload } from "./upload";
+
+// 单次调用能承担多少个 part 由 subrequest 额度决定，而额度是硬的：Standard 每调用 50 个
+// 外部请求，本账户实测 45/50 通过、55 起被拒，且在 wrangler.toml 里加 [limits] 会被 API
+// 打回。名义上每个 part 花 2 个（getFile 换 file_path + range 取字节），但实测运行时计数
+// 比这更高（18 part 的文件在第 11 块左右被打断，此时名义消耗只有 22），所以这里按每块 5 个
+// 估，取 8 块/跳 —— 40 个额度，余量留给重试。
+const PARTS_PER_HOP = 8;
+// 超过一跳容量时把剩余区间交给自己的下一次调用：service binding 的子调用拥有独立的 50 个
+// 额度（已实测：depth0/1/2 各 45 次外部 fetch，合计 135 次）。链深本身也有上限，实测
+// 第 31 层报 "Subrequest depth limit exceeded"，所以取 24 留足余量：
+// 25 次调用 × 8 块 = 200 块 ≈ 3.1 GiB，覆盖任何现实文件。
+const MAX_HOP_DEPTH = 24;
+// 续跳必须被证明是"当前票据区间内的子区间"，否则任何人都能借它读到任意字节。
+const HOP_HEADER = "X-Gateway-Segment";
+const HOP_SIGNATURE_HEADER = "X-Gateway-Segment-Sig";
+
+interface HopRequest {
+  start: number;
+  end: number;
+  depth: number;
+}
+
+function hopSegment(ticket: string, start: number, end: number, depth: number): string {
+  return `seg:${ticket}:${start}:${end}:${depth}`;
+}
+
+// 解析续跳头并验签。任何不自洽（缺签名、越界、深度超限）都当作普通请求处理，
+// 让票据本身的范围与过期时间继续说话。
+async function readHop(
+  request: Request,
+  env: Env,
+  ticket: string,
+  selection: RangeSelection,
+  size: number,
+): Promise<HopRequest | null> {
+  const raw = request.headers.get(HOP_HEADER);
+  const signature = request.headers.get(HOP_SIGNATURE_HEADER);
+  if (!raw || !signature) return null;
+
+  const match = /^(\d+)-(\d+)-(\d+)$/.exec(raw.trim());
+  if (!match) return null;
+  const start = Number.parseInt(match[1] as string, 10);
+  const end = Number.parseInt(match[2] as string, 10);
+  const depth = Number.parseInt(match[3] as string, 10);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= size) return null;
+  if (end >= size || depth < 1 || depth > MAX_HOP_DEPTH) return null;
+  // 只允许落在本票据自己的区间内，且只能向内收窄，不能借续跳扩大读取范围。
+  if (start < selection.start || end > selection.end) return null;
+
+  const expected = await signSegment(env.GATEWAY_SECRET ?? "", hopSegment(ticket, start, end, depth));
+  if (!verifySegment(expected, signature)) return null;
+
+  return { start, end, depth };
+}
 
 interface RangeSelection {
   start: number;
@@ -146,7 +200,14 @@ async function handleDownload(
     return new Response(headOnly ? null : new Uint8Array(0), { status: 200, headers });
   }
 
-  const selection = resolveRange(payload.r, request.headers.get("Range"), manifest.size);
+  const ticketSelection = resolveRange(payload.r, request.headers.get("Range"), manifest.size);
+
+  // 续跳：本跳只负责票据区间内的一段，由上一跳签名指定，不能被调用方自行扩大。
+  const hop = await readHop(request, env, ticket, ticketSelection, manifest.size);
+  const selection: RangeSelection = hop
+    ? { start: hop.start, end: hop.end, length: hop.end - hop.start + 1, partial: true }
+    : ticketSelection;
+  const depth = hop ? hop.depth : 0;
 
   // 条件请求：区间请求不做 304，避免客户端拿到不完整的缓存。
   if (!selection.partial && etag && request.headers.get("If-None-Match") === etag) {
@@ -174,15 +235,22 @@ async function handleDownload(
     throw new HttpError(500, "part_layout_mismatch");
   }
 
+  // 一跳能承担多少块由 subrequest 额度决定，所以这里把区间切成本跳 + 后续跳。
+  // 只有本跳自己的块要花额度，尾段交给下一次调用（各自一份新额度）。
+  const canDelegate = depth < MAX_HOP_DEPTH && needed.length > PARTS_PER_HOP;
+  const localParts = canDelegate ? needed.slice(0, PARTS_PER_HOP) : needed;
+  // 尾段从下一块的开头开始；区间起点若落在块中间，本跳已覆盖到该块末尾。
+  const tailStart = canDelegate ? Math.max(selection.start, (needed[PARTS_PER_HOP] as ManifestPart).off) : -1;
+
   // 预算必须在写响应头之前立好。每个 part 固定要 2 个 subrequest：getFile 换 file_path
   // （每个 part 的 telegram_file_id 不同，缓存键也不同，所以省不掉）、range 取字节。
   // 若连"每块各取一次、一次都不重试"都放不下，就现在拒绝——此时响应头还没发，
   // 客户端能拿到真正的 503 并自行改用 Range 分段请求，而不是收到传了一半的 200。
   const budget = new SubrequestBudget();
-  if (!budget.canAfford(2 * needed.length)) {
+  if (!budget.canAfford(2 * localParts.length)) {
     throw new HttpError(
       503,
-      `subrequest_budget_too_small_parts_${needed.length}_limit_${SUBREQUEST_LIMIT}`,
+      `subrequest_budget_too_small_parts_${localParts.length}_limit_${SUBREQUEST_LIMIT}`,
     );
   }
 
@@ -199,12 +267,12 @@ async function handleDownload(
   void (async () => {
     const inflight: PartStream[] = [];
     const startPartAt = (index: number): void => {
-      if (index >= needed.length) return;
-      const part = needed[index] as ManifestPart;
+      if (index >= localParts.length) return;
+      const part = localParts[index] as ManifestPart;
       // 先替后面的块把额度占住：每一块至少要 1 次 range fetch（file_path 命中缓存时
       // getFile 不花钱），所以留下 2 * 剩余块数是下限。重试只能花超出这部分的空间，
       // 否则前面某一块的抖动会把后面块的基本额度吃光，把局部问题放大成整条响应失败。
-      budget.hold(2 * (needed.length - index - 1));
+      budget.hold(2 * (localParts.length - index - 1));
       inflight.push(
         startPartFetch(
           env,
@@ -217,9 +285,9 @@ async function handleDownload(
     };
 
     try {
-      for (let index = 0; index < needed.length; index += 1) {
+      for (let index = 0; index < localParts.length; index += 1) {
         // 让第 index 块以及它后面的 PREFETCH_DEPTH 块都已在飞。
-        while (inflight.length <= PREFETCH_DEPTH && index + inflight.length < needed.length) {
+        while (inflight.length <= PREFETCH_DEPTH && index + inflight.length < localParts.length) {
           startPartAt(index + inflight.length);
         }
         const current = inflight.shift() as PartStream;
@@ -245,6 +313,38 @@ async function handleDownload(
           clearTimeout(watchdog);
         }
       }
+
+      // 尾段交给下一次调用：它拥有独立的 50 个 subrequest 额度，因此一次响应能覆盖
+      // 的 part 数不再受单次调用限制。段边界与深度都签在头里，下一跳只能读到本票据
+      // 区间内、且比本跳更靠后的一段。
+      if (tailStart >= 0) {
+        const segment = `${tailStart}-${selection.end}-${depth + 1}`;
+        const signature = await signSegment(
+          env.GATEWAY_SECRET ?? "",
+          hopSegment(ticket, tailStart, selection.end, depth + 1),
+        );
+        const response = await env.SELF.fetch(
+          new Request(`https://teldrive-gateway.invalid/d/${encodeURIComponent(ticket)}`, {
+            method: "GET",
+            headers: { [HOP_HEADER]: segment, [HOP_SIGNATURE_HEADER]: signature },
+          }),
+        );
+        if (!response.ok || !response.body) {
+          throw new HttpError(502, `hop_failed_${response.status}`);
+        }
+        const expected = selection.end - tailStart + 1;
+        const declared = Number.parseInt(response.headers.get("Content-Length") ?? "", 10);
+        // 下一跳算错长度就是它自己的 bug；这里只信它声明的字节数必须正好补满尾段。
+        if (Number.isFinite(declared) && declared !== expected) {
+          throw new HttpError(502, "hop_length_mismatch");
+        }
+        await response.body.pipeTo(writable, {
+          preventClose: true,
+          preventAbort: true,
+          preventCancel: true,
+        });
+      }
+
       await writable.close();
     } catch (error) {
       // 已经预取但还没消费的块必须显式丢弃，否则它们的响应体会一直挂在运行时里。

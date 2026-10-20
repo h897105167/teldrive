@@ -72,8 +72,12 @@ function timingSafeEqual(left: string, right: string): boolean {
   return diff === 0;
 }
 
-export async function verifyTicket(token: string, secret: string, nowUnix: number): Promise<TicketPayload> {
-  if (!secret) throw new HttpError(500, "gateway_secret_unset");
+// 给非票据的派生签名复用同一套比较：续跳头用它验证签名，调用方不必自己写比较。
+export function verifySegment(expected: string, provided: string): boolean {
+  return timingSafeEqual(expected, provided);
+}
+
+export async function verifyTicket(token: string, secret: string, nowUnix: number): Promise<TicketPayload> {  if (!secret) throw new HttpError(500, "gateway_secret_unset");
 
   const separator = token.indexOf(".");
   if (separator <= 0 || separator === token.length - 1) {

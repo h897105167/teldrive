@@ -11,6 +11,14 @@ import { verifyTicket } from "./ticket";
 
 const MAX_PART_BYTES = 16 * 1024 * 1024;
 
+// sendDocument 要上传 16 MiB 到 Telegram，实测正常 17–45 s；给一个有界预算，
+// 让"上游不再回话"变成可重试的失败，而不是让客户端的 PUT 无限期挂着
+// （实测出现过 152 s 后拿到 502、期间没有任何错误可诊断的情况）。
+const SEND_TIMEOUT_MS = 120_000;
+// 落库回调是纯 JSON，VPS 就在同一条链路上，不需要长预算。
+const COMPLETE_TIMEOUT_MS = 30_000;
+const SEND_ATTEMPTS = 3;
+
 interface SendDocumentResult {
   message_id?: number;
   document?: {
@@ -60,22 +68,35 @@ export async function handleUpload(request: Request, env: Env, ticket: string): 
 }
 
 // multipart sendDocument，429 退避复用下载路径的解析逻辑。
-async function sendDocument(env: Env, token: string, body: ArrayBuffer, attempts = 3): Promise<SendDocumentResult> {
+// 每次尝试都有自己的超时；超时/网络错误按"可重试"处理，只有 Telegram 明确
+// 拒绝（非 429 的 4xx/5xx）才立即失败。
+async function sendDocument(env: Env, token: string, body: ArrayBuffer, attempts = SEND_ATTEMPTS): Promise<SendDocumentResult> {
+  let lastError: HttpError | null = null;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const form = new FormData();
     form.set("chat_id", env.CHANNEL_ID);
     form.set("document", new Blob([body], { type: "application/octet-stream" }), randomFilename());
     form.set("disable_content_type_detection", "true");
-    const response = await fetch(`https://api.telegram.org/bot${token}/sendDocument`, {
-      method: "POST",
-      body: form,
-    });
+    let response: Response;
+    try {
+      response = await fetch(`https://api.telegram.org/bot${token}/sendDocument`, {
+        method: "POST",
+        body: form,
+        signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
+      });
+    } catch (error) {
+      // 超时与连接中断都在这里：留到下一轮重试，耗尽后再报。
+      lastError = new HttpError(502, `telegram_send_failed_${errorName(error)}`);
+      if (attempt < attempts - 1) continue;
+      break;
+    }
     if (response.status === 429) {
       const delay = await retryAfterSeconds(response, attempt);
       if (attempt < attempts - 1) {
         await sleep(delay * 1000);
         continue;
       }
+      lastError = new HttpError(429, "telegram_rate_limited");
       break;
     }
     if (!response.ok) {
@@ -88,7 +109,16 @@ async function sendDocument(env: Env, token: string, body: ArrayBuffer, attempts
     }
     return parsed.result;
   }
-  throw new HttpError(429, "telegram_rate_limited");
+  throw lastError ?? new HttpError(502, "telegram_send_failed");
+}
+
+function errorName(error: unknown): string {
+  if (error instanceof Error) {
+    if (error.name === "TimeoutError") return "timeout";
+    if (error.name === "AbortError") return "aborted";
+    return "network";
+  }
+  return "unknown";
 }
 
 // 回调 VPS 内部端点：Bearer ticket 自证，载荷只含 fid/mid/size。
@@ -106,6 +136,7 @@ async function notifyUploadComplete(
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ fid: fileID, mid: messageID, size }),
+    signal: AbortSignal.timeout(COMPLETE_TIMEOUT_MS),
   });
   await response.body?.cancel();
   if (response.status === 409) throw new HttpError(409, "lease_lost");

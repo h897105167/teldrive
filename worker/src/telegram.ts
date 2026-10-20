@@ -15,11 +15,18 @@ export interface Env {
   /** 上传完成回调端点；缺省从 MANIFEST_URL 推导同源 /internal/gateway/upload-complete。 */
   UPLOAD_COMPLETE_URL?: string;
   /**
+   * 指向本 Worker 自己的 service binding。service binding 的子调用拥有独立的
+   * subrequest 额度（实测每跳 45 个外部请求、连跳三次合计 135），所以超过
+   * 单次调用容量的响应靠它接力，而不是被运行时从中间掐断。
+   */
+  SELF: Fetcher;
+  /**
    * BOT_TOKEN_1 .. BOT_TOKEN_N —— 每个网关 bot 槽位对应一个 secret。
    * 槽位号取自清单 part.bot（由服务端 gateway.bot-slots 顺序决定），
    * 数量不固定，因此这里用索引签名而不是写死的 BOT_TOKEN_1 / BOT_TOKEN_2。
+   * 值同时也可能是 binding 对象（见上面的 SELF），所以取值处必须判类型。
    */
-  [key: string]: string | undefined;
+  [key: string]: string | Fetcher | undefined;
 }
 
 const FILE_PATH_TTL_SECONDS = 3000; // 50 分钟
@@ -31,7 +38,7 @@ const RANGE_TIMEOUT_MS = 90_000;
 
 export function botToken(env: Env, slot: number): string {
   const token = env[`BOT_TOKEN_${slot}`];
-  if (!token) throw new HttpError(500, "bot_slot_unconfigured");
+  if (typeof token !== "string" || !token) throw new HttpError(500, "bot_slot_unconfigured");
   return token;
 }
 

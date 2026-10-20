@@ -18,3 +18,10 @@ MANIFEST_URL = "https://teldrive.h897105167.dpdns.org/internal/gateway/manifest"
 # 上传完成回调端点（P2）。缺省时 Worker 会从 MANIFEST_URL 推导同源地址，
 # 这里显式写出以便与 MANIFEST_URL 解耦演进。
 UPLOAD_COMPLETE_URL = "https://teldrive.h897105167.dpdns.org/internal/gateway/upload-complete"
+
+# 自我绑定：每次子调用都拿到独立的 subrequest 额度（实测每跳 45 个外部请求，
+# 三跳合计 135），所以超过单次调用容量的响应靠它接力分片。
+# 注意不能用自 URL 的 fetch 代替——同 zone 的自我请求会被运行时以 1042 拒绝。
+[[services]]
+binding = "SELF"
+service = "teldrive-gateway"
