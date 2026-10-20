@@ -13,6 +13,12 @@ Defaults are runtime values, not production recommendations.
 
 <ConfigOption name={"cache.memory.size"} flag={"--cache-memory-size"} env={"TELDRIVE_CACHE_MEMORY_SIZE"} defaultValue={"5MB"} description={"Global Ristretto memory cache size (e.g., 5MB, 10MB)"} />
 
+## Cloudflare
+
+<ConfigOption name={"cloudflare.api-token-ciphertext"} flag={"--cloudflare-api-token-ciphertext"} env={"TELDRIVE_CLOUDFLARE_API_TOKEN_CIPHERTEXT"} defaultValue={""} description={"Encrypted Cloudflare API token (base64 secureblob ciphertext). Leave empty until a token is saved via POST /v1/settings/worker-deploy"} />
+
+<ConfigOption name={"cloudflare.bundle-path"} flag={"--cloudflare-bundle-path"} env={"TELDRIVE_CLOUDFLARE_BUNDLE_PATH"} defaultValue={""} description={"Path to the Cloudflare Worker bundled JavaScript file (ESM). Defaults to /usr/local/share/teldrive/worker/index.js on Linux."} />
+
 ## Database
 
 <ConfigOption name={"database.application-name"} flag={"--database-application-name"} env={"TELDRIVE_DATABASE_APPLICATION_NAME"} defaultValue={"teldrive-v2"} description={"PostgreSQL application name"} />
@@ -69,11 +75,15 @@ Defaults are runtime values, not production recommendations.
 
 <ConfigOption name={"gateway.enabled"} flag={"--gateway-enabled"} env={"TELDRIVE_GATEWAY_ENABLED"} defaultValue={"false"} description={"Serve download bytes directly from the Cloudflare gateway Worker instead of this server"} />
 
+<ConfigOption name={"gateway.origin-url"} flag={"--gateway-origin-url"} env={"TELDRIVE_GATEWAY_ORIGIN_URL"} defaultValue={""} description={"Control-plane origin reached by the gateway Worker for manifest / upload-complete callbacks; falls back to public-url when empty. Set this when public-url points at the Worker while the API stays on a different host (for example https://teldrive.example.com)"} />
+
 <ConfigOption name={"gateway.public-url"} flag={"--gateway-public-url"} env={"TELDRIVE_GATEWAY_PUBLIC_URL"} defaultValue={""} description={"Gateway Worker base URL used in download redirects (for example https://name.workers.dev)"} />
 
 <ConfigOption name={"gateway.secret"} flag={"--gateway-secret"} env={"TELDRIVE_GATEWAY_SECRET"} defaultValue={""} description={"HMAC secret shared with the gateway Worker (GATEWAY_SECRET)"} />
 
 <ConfigOption name={"gateway.ticket-ttl"} flag={"--gateway-ticket-ttl"} env={"TELDRIVE_GATEWAY_TICKET_TTL"} defaultValue={"10m0s"} description={"Lifetime of gateway download tickets"} />
+
+<ConfigOption name={"gateway.worker-min-bytes"} flag={"--gateway-worker-min-bytes"} env={"TELDRIVE_GATEWAY_WORKER_MIN_BYTES"} defaultValue={"0"} description={"Downloads smaller than this many bytes stay on this server instead of the gateway Worker; 0 sends every gateway-eligible file to the Worker. Small files suffer the Worker's extra hop latency, so set this to e.g. 16777216 to keep thumbnails and images on the direct path"} />
 
 ## HTTP
 

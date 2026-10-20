@@ -414,6 +414,11 @@
       default = null;
       description = "Gateway Worker base URL used in download redirects (for example https://name.workers.dev) (No default; upstream applies its own.)";
     };
+    "origin-url" = lib.mkOption {
+      type = lib.types.nullOr (lib.types.str);
+      default = null;
+      description = "Control-plane origin reached by the gateway Worker for manifest / upload-complete callbacks; falls back to public-url when empty. Set this when public-url points at the Worker while the API stays on a different host (for example https://teldrive.example.com) (No default; upstream applies its own.)";
+    };
     "secret" = lib.mkOption {
       type = lib.types.nullOr (lib.types.str);
       default = null;
@@ -424,10 +429,27 @@
       default = null;
       description = "Lifetime of gateway download tickets (Default: 10m) [validate: gt=0]";
     };
+    "worker-min-bytes" = lib.mkOption {
+      type = lib.types.nullOr (lib.types.int);
+      default = null;
+      description = "Downloads smaller than this many bytes stay on this server instead of the gateway Worker; 0 sends every gateway-eligible file to the Worker. Small files suffer the Worker's extra hop latency, so set this to e.g. 16777216 to keep thumbnails and images on the direct path (Default: 0)";
+    };
     "bot-slots" = lib.mkOption {
       type = lib.types.nullOr (lib.types.listOf lib.types.str);
       default = null;
       description = "Comma-separated Telegram bot numeric IDs in slot order; slot n uses entry n (No default; upstream applies its own.)";
+    };
+  };
+  "cloudflare" = {
+    "api-token-ciphertext" = lib.mkOption {
+      type = lib.types.nullOr (lib.types.str);
+      default = null;
+      description = "Encrypted Cloudflare API token (base64 secureblob ciphertext). Leave empty until a token is saved via POST /v1/settings/worker-deploy (No default; upstream applies its own.)";
+    };
+    "bundle-path" = lib.mkOption {
+      type = lib.types.nullOr (lib.types.str);
+      default = null;
+      description = "Path to the Cloudflare Worker bundled JavaScript file (ESM). Defaults to /usr/local/share/teldrive/worker/index.js on Linux. (No default; upstream applies its own.)";
     };
   };
 }

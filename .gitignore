@@ -15,5 +15,6 @@ ui/.tanstack/
 
 # local build output, dev config, and runtime state — not source
 teldrive.exe
+teldrive-merged.exe
 config.toml
 var/
